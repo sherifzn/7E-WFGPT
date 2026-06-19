@@ -1,0 +1,11 @@
+.DS_Store
+node_modules/
+target/
+dist/
+coverage/
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+dependency-check-report.*
