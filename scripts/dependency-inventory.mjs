@@ -79,6 +79,7 @@ function mavenRows() {
 
 function internalModuleRows() {
   return [
+    "| Internal module | `contracts -> domain` | Reuses the canonical domain data-classification model in transport-facing contracts | Internal project code | No third-party supply chain impact | Built in the Maven reactor |",
     "| Internal module | `adapters -> domain` | Keeps serialization schema access separate from pure domain contracts | Internal project code | No third-party supply chain impact | Built in the Maven reactor |",
     "| Internal module | `architecture-tests -> domain/adapters/backend/contracts` | Verifies module dependency boundaries and forbidden integration markers | Internal project code | No third-party supply chain impact | Used by Maven test phase |"
   ];

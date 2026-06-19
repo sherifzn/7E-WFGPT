@@ -1,6 +1,7 @@
 package com.sevenewf.workflow.domain.work;
 
 import com.sevenewf.workflow.domain.common.DataClassification;
+import com.sevenewf.workflow.domain.common.DomainVersion;
 import com.sevenewf.workflow.domain.common.Validation;
 import com.sevenewf.workflow.domain.workflow.ActivityInstanceId;
 import java.time.Instant;
@@ -8,6 +9,7 @@ import java.util.Optional;
 
 public record TaskInstance(
     TaskInstanceId id,
+    DomainVersion stateVersion,
     TaskTypeId taskTypeId,
     ActivityInstanceId activityInstanceId,
     TaskInstanceStatus status,
@@ -16,6 +18,7 @@ public record TaskInstance(
     DataClassification dataClassification) {
   public TaskInstance {
     Validation.requirePresent(id, "id");
+    Validation.requirePresent(stateVersion, "stateVersion");
     Validation.requirePresent(taskTypeId, "taskTypeId");
     Validation.requirePresent(activityInstanceId, "activityInstanceId");
     Validation.requirePresent(status, "status");

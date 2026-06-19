@@ -109,6 +109,7 @@ final class DomainContractsInvariantTest {
     WorkflowInstance instance =
         new WorkflowInstance(
             workflowInstanceId(),
+            version(),
             workflowVersion.id(),
             WorkflowInstanceStatus.CREATED,
             tenantScope(),
@@ -118,6 +119,7 @@ final class DomainContractsInvariantTest {
     ActivityInstance activityInstance =
         new ActivityInstance(
             activityInstanceId(),
+            version(),
             instance.id(),
             activityDefinition().id(),
             ActivityInstanceStatus.SCHEDULED,
@@ -125,7 +127,9 @@ final class DomainContractsInvariantTest {
             CLASSIFICATION);
 
     Assertions.assertEquals(workflowVersion.id(), instance.workflowVersionId());
+    Assertions.assertEquals(version(), instance.stateVersion());
     Assertions.assertEquals(instance.id(), activityInstance.workflowInstanceId());
+    Assertions.assertEquals(version(), activityInstance.stateVersion());
   }
 
   @Test
@@ -135,6 +139,7 @@ final class DomainContractsInvariantTest {
     TaskInstance taskInstance =
         new TaskInstance(
             taskInstanceId(),
+            version(),
             taskType.id(),
             activityInstanceId(),
             TaskInstanceStatus.CREATED,
@@ -157,6 +162,7 @@ final class DomainContractsInvariantTest {
             CLASSIFICATION);
 
     Assertions.assertEquals(taskType.id(), taskInstance.taskTypeId());
+    Assertions.assertEquals(version(), taskInstance.stateVersion());
     Assertions.assertEquals(taskType.id(), assignmentPolicy.taskTypeId());
     Assertions.assertEquals(taskType.id(), escalationPolicy.taskTypeId());
     Assertions.assertThrows(
@@ -181,6 +187,22 @@ final class DomainContractsInvariantTest {
         () ->
             new SlaPolicy(
                 slaPolicyId(), version(), taskTypeId(), breachAfter, warningAfter, CLASSIFICATION));
+  }
+
+  @Test
+  void runtimeInstancesRequirePositiveStateVersions() {
+    Assertions.assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new WorkflowInstance(
+                workflowInstanceId(),
+                new DomainVersion(0),
+                workflowVersionId(),
+                WorkflowInstanceStatus.CREATED,
+                tenantScope(),
+                correlationId(),
+                SYNTHETIC_TIME,
+                CLASSIFICATION));
   }
 
   @Test

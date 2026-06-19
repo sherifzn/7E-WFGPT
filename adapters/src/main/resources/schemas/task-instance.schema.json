@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.enterprise-workflow.local/domain/task-instance.schema.json",
+  "title": "TaskInstance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "stateVersion",
+    "taskTypeId",
+    "activityInstanceId",
+    "status",
+    "createdAt",
+    "dataClassification"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/typedId" },
+    "stateVersion": { "$ref": "#/$defs/version" },
+    "taskTypeId": { "$ref": "#/$defs/typedId" },
+    "activityInstanceId": { "$ref": "#/$defs/typedId" },
+    "status": { "type": "string" },
+    "assignedTeamId": { "$ref": "#/$defs/typedId" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "dataClassification": { "$ref": "#/$defs/dataClassification" }
+  },
+  "$defs": {
+    "typedId": {
+      "type": "object",
+      "required": ["value"],
+      "properties": { "value": { "type": "string", "minLength": 1 } }
+    },
+    "version": {
+      "type": "object",
+      "required": ["value"],
+      "properties": { "value": { "type": "integer", "minimum": 1 } }
+    },
+    "dataClassification": {
+      "type": "string",
+      "enum": ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED", "HIGHLY_RESTRICTED"]
+    }
+  }
+}
