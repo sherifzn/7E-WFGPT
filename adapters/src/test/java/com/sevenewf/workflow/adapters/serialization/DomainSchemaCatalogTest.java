@@ -118,8 +118,10 @@ final class DomainSchemaCatalogTest {
   }
 
   private static void assertRequiredField(String schema, String fieldName) {
+    String requiredFields = arrayBlockAfter(schema, "\"required\"");
     Assertions.assertTrue(
-        schema.contains("\"" + fieldName + "\""), "Schema missing required field: " + fieldName);
+        requiredFields.contains("\"" + fieldName + "\""),
+        "Schema missing required field: " + fieldName);
   }
 
   private static void assertCanonicalDataClassificationValues(String schema) {
@@ -142,6 +144,14 @@ final class DomainSchemaCatalogTest {
     int endIndex = schema.indexOf(']', startIndex);
     Assertions.assertTrue(
         markerIndex >= 0 && enumIndex >= 0 && startIndex >= 0 && endIndex > startIndex);
+    return schema.substring(startIndex, endIndex + 1);
+  }
+
+  private static String arrayBlockAfter(String schema, String marker) {
+    int markerIndex = schema.indexOf(marker);
+    int startIndex = schema.indexOf('[', markerIndex);
+    int endIndex = schema.indexOf(']', startIndex);
+    Assertions.assertTrue(markerIndex >= 0 && startIndex >= 0 && endIndex > startIndex);
     return schema.substring(startIndex, endIndex + 1);
   }
 }

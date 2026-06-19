@@ -37,5 +37,5 @@ Task 002 adds immutable core domain contracts only. It does not implement workfl
 ## Known limitations
 
 - The contracts define structure and invariants, not state transitions.
-- JSON schemas cover the initial serialization boundary for `WorkflowDefinition` and `AuditEvent`; additional schemas should be added as adapters mature.
+- JSON schemas currently cover `WorkflowDefinition`, `WorkflowInstance`, `ActivityInstance`, `TaskInstance`, and `AuditEvent`; additional schemas should be added as adapters mature.
 - Domain IDs are typed string wrappers; final ID format policy remains unresolved.
