@@ -37,7 +37,7 @@ Task 003 implements the Property Key Handover vertical slice only. It proves the
 ## Durability and recovery
 
 - `KeyHandoverStateStore` is a persistence port, not a production database choice. It commits each state transition together with pending immutable audit records.
-- The synthetic in-memory store is fast-test-only. A clearly labeled test-only path-backed snapshot adapter proves reconstruction from the same test storage location in-process; it is not production durability.
+- The synthetic in-memory store is fast-test-only. The clearly labeled test-only path-backed adapter writes and reloads the complete workflow state, business-key index, and pending audit records from the supplied file path; it is not a production durability choice.
 - Pending audits remain recoverable if sink delivery fails and are retried idempotently after reconstruction.
 - `DomainVersion stateVersion` is mandatory on state and expected by state-changing commands to support future optimistic concurrency and event ordering.
 - Notification idempotency uses `IdempotencyKey`. Delivery status, attempt count, and a non-sensitive failure reference are persisted. Explicit recovery retries notification delivery without duplicate successful sends.
@@ -68,7 +68,7 @@ No new external dependency was introduced for Task 003. The slice uses the exist
 ## Known limitations
 
 - This is not a generic workflow engine, low-code designer, REST API, production database integration, production connector implementation, AI gateway, or cloud infrastructure.
-- The test-only path-backed adapter is same-process reconstruction coverage, not crash-safe, multi-process, or production persistence.
+- The test-only path-backed adapter is a JDK-only atomic file-snapshot test harness, not a production database, multi-process concurrency mechanism, or operational recovery design.
 - No production transactional outbox, durable queue, audit delivery worker, timer scheduling, worker leasing, distributed lock, compensation, or retry scheduler has been selected.
 - Business thresholds, role names, team names, SLA values, authority limits, and routing rules remain configuration or BRE/DMN concerns and are not hard-coded into domain logic.
 - The deterministic decision service is a slice placeholder behind `DecisionService`; BRE/DMN ownership requires an ADR before production implementation.

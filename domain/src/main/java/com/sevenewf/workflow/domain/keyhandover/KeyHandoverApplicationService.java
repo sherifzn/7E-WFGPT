@@ -29,6 +29,7 @@ public final class KeyHandoverApplicationService {
   private final KeyHandoverStateStore stateStore;
   private final AuthorizationService authorizationService;
   private final RetryScheduler retryScheduler;
+  private final AutomaticAssignmentService automaticAssignmentService;
   private final SlicePolicies policies;
 
   public KeyHandoverApplicationService(
@@ -45,6 +46,7 @@ public final class KeyHandoverApplicationService {
       KeyHandoverStateStore stateStore,
       AuthorizationService authorizationService,
       RetryScheduler retryScheduler,
+      AutomaticAssignmentService automaticAssignmentService,
       SlicePolicies policies) {
     this.propertyConnector = propertyConnector;
     this.ownerIdentityConnector = ownerIdentityConnector;
@@ -59,6 +61,7 @@ public final class KeyHandoverApplicationService {
     this.stateStore = stateStore;
     this.authorizationService = authorizationService;
     this.retryScheduler = retryScheduler;
+    this.automaticAssignmentService = automaticAssignmentService;
     this.policies = policies;
   }
 
@@ -182,6 +185,11 @@ public final class KeyHandoverApplicationService {
     enforceSegregationOfDuties(state, current, actor.actorId());
     if (current.status() == BranchStatus.COMPLETED)
       throw new ValidationFailedException("Completed task cannot be claimed");
+    if (current.assignedTo().filter(actor.actorId()::equals).isPresent()) return state;
+    if (current.assignedTo().isPresent())
+      throw new AuthorizationDeniedException("Task is already assigned to another actor");
+    if (current.taskPolicy().assignmentMode() == AssignmentMode.AUTOMATIC)
+      throw new ValidationFailedException("Automatic tasks cannot be claimed manually");
     Map<ClearanceBranch, BranchState> branches = mutableBranches(state);
     branches.put(branch, current.assignedTo(actor.actorId()));
     KeyHandoverState next =
@@ -215,6 +223,7 @@ public final class KeyHandoverApplicationService {
     requireClearanceInProgress(state);
     BranchState current = requireBranch(state, command.branch());
     enforceEligibleAndAuthorized(current, command.newAssignee());
+    enforceSegregationOfDuties(state, current, command.newAssignee().actorId());
     if (current.status() == BranchStatus.COMPLETED)
       throw new ValidationFailedException("Completed task cannot be reassigned");
     Map<ClearanceBranch, BranchState> branches = mutableBranches(state);
@@ -256,6 +265,7 @@ public final class KeyHandoverApplicationService {
     requireClearanceInProgress(state);
     BranchState current = requireBranch(state, command.branch());
     enforceEligibleAndAuthorized(current, command.newAssignee());
+    enforceSegregationOfDuties(state, current, command.newAssignee().actorId());
     Map<ClearanceBranch, BranchState> branches = mutableBranches(state);
     branches.put(command.branch(), current.assignedTo(command.newAssignee().actorId()));
     KeyHandoverState next =
@@ -291,6 +301,13 @@ public final class KeyHandoverApplicationService {
   }
 
   public KeyHandoverState completeBranch(BranchCompletion command) {
+    if (command.branch() != ClearanceBranch.HANDOVER)
+      throw new ValidationFailedException(
+          "Finance and Legal branches require connector-backed completion operations");
+    return completeHumanBranch(command);
+  }
+
+  private KeyHandoverState completeHumanBranch(BranchCompletion command) {
     authorizationService.require(command.completedBy(), Permission.COMPLETE_TASK);
     KeyHandoverState state = requireState(command.requestId());
     requireClearanceInProgress(state);
@@ -298,6 +315,15 @@ public final class KeyHandoverApplicationService {
     if (current.status() == BranchStatus.COMPLETED) {
       if (current.outcome().orElseThrow() == command.outcome()
           && current.evidenceReferences().equals(command.evidenceReferences())) return state;
+      stateStore.appendPendingAudit(
+          audit(
+              "ConflictingDuplicateCompletionRejected",
+              state,
+              command.completedBy().actorId(),
+              command.correlationId(),
+              command.causationId(),
+              command.evidenceReferences(),
+              Map.of("branch", command.branch().name())));
       throw new ConflictingDuplicateCompletionException(
           "Conflicting duplicate completion rejected");
     }
@@ -365,7 +391,7 @@ public final class KeyHandoverApplicationService {
                 financeConnector.financeClearance(
                     state.propertyReference(), state.ownerReference()),
             "financeClearance");
-    return completeBranch(
+    return completeHumanBranch(
         new BranchCompletion(
             requestId,
             ClearanceBranch.FINANCE,
@@ -380,6 +406,7 @@ public final class KeyHandoverApplicationService {
   public KeyHandoverState completeLegalBranch(
       KeyHandoverRequestId requestId,
       Actor actor,
+      ClearanceOutcome outcome,
       DomainVersion expectedVersion,
       CorrelationId correlationId,
       CausationId causationId) {
@@ -395,11 +422,11 @@ public final class KeyHandoverApplicationService {
         retry(
             () -> legalConnector.legalEvidence(state.propertyReference(), state.ownerReference()),
             "legalEvidence");
-    return completeBranch(
+    return completeHumanBranch(
         new BranchCompletion(
             requestId,
             ClearanceBranch.LEGAL,
-            ClearanceOutcome.GREEN,
+            outcome,
             List.of(evidence),
             actor,
             expectedVersion,
@@ -775,21 +802,38 @@ public final class KeyHandoverApplicationService {
 
   private Map<ClearanceBranch, BranchState> openBranches(Instant now) {
     Map<ClearanceBranch, BranchState> branches = new EnumMap<>(ClearanceBranch.class);
-    for (ClearanceBranch branch : ClearanceBranch.values())
+    for (ClearanceBranch branch : ClearanceBranch.values()) {
+      HumanTaskPolicy policy = policies.taskPolicies().get(branch);
+      Optional<ActorId> assignee = Optional.empty();
+      BranchStatus status = BranchStatus.OPEN;
+      if (policy.assignmentMode() == AssignmentMode.AUTOMATIC) {
+        Actor automaticallyAssigned = automaticAssignmentService.assign(policy);
+        enforceEligibleAndAuthorized(policy, automaticallyAssigned);
+        assignee = Optional.of(automaticallyAssigned.actorId());
+        status = BranchStatus.CLAIMED;
+      }
       branches.put(
           branch,
           new BranchState(
               branch,
-              BranchStatus.OPEN,
-              policies.taskPolicies().get(branch),
-              Optional.empty(),
+              status,
+              policy,
+              assignee,
               Optional.empty(),
               Optional.empty(),
               List.of(),
               now,
               Optional.empty(),
               Optional.empty()));
+    }
     return branches;
+  }
+
+  private void enforceEligibleAndAuthorized(HumanTaskPolicy policy, Actor actor) {
+    if (!actor.eligibleTeamsOrRoles().contains(policy.eligibleTeamOrRole()))
+      throw new AuthorizationDeniedException("Actor is not eligible for task policy");
+    if (!actor.authorityScopes().containsAll(policy.requiredAuthorityScopes()))
+      throw new AuthorizationDeniedException("Actor does not hold required authority scopes");
   }
 
   private KeyHandoverState next(

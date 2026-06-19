@@ -64,6 +64,10 @@ public final class KeyHandoverPorts {
     void backoff(Duration delay, int failedAttempt, String operation);
   }
 
+  public interface AutomaticAssignmentService {
+    KeyHandoverTypes.Actor assign(KeyHandoverTypes.HumanTaskPolicy taskPolicy);
+  }
+
   public interface KeyHandoverStateStore {
     Optional<KeyHandoverState> findByBusinessKey(BusinessKey businessKey);
 
@@ -73,6 +77,8 @@ public final class KeyHandoverPorts {
 
     KeyHandoverState commit(
         KeyHandoverState state, DomainVersion expectedVersion, List<AuditRecord> pendingAudits);
+
+    void appendPendingAudit(AuditRecord auditRecord);
 
     List<AuditRecord> pendingAudits();
 

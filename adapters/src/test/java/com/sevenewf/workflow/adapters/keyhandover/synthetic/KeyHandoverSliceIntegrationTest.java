@@ -300,12 +300,214 @@ final class KeyHandoverSliceIntegrationTest {
     SliceContext original =
         new SliceContext("durable", new TestOnlyPathBackedKeyHandoverStateStore(location));
     KeyHandoverState state = original.submit();
+    SliceContext reconstructedContext =
+        new SliceContext("durable", new TestOnlyPathBackedKeyHandoverStateStore(location));
     KeyHandoverState reconstructed =
-        new SliceContext("durable", new TestOnlyPathBackedKeyHandoverStateStore(location))
-            .store
-            .findById(state.requestId())
-            .orElseThrow();
+        reconstructedContext.store.findById(state.requestId()).orElseThrow();
     assertEquals(state, reconstructed);
+    KeyHandoverState claimed =
+        reconstructedContext.claim(
+            reconstructed, ClearanceBranch.HANDOVER, reconstructedContext.handoverActor());
+    KeyHandoverState continued =
+        reconstructedContext.complete(
+            claimed,
+            ClearanceBranch.HANDOVER,
+            ClearanceOutcome.GREEN,
+            reconstructedContext.handoverActor());
+    assertEquals(
+        BranchStatus.COMPLETED, continued.branches().get(ClearanceBranch.HANDOVER).status());
+  }
+
+  @Test
+  void connectorBackedBranchesCannotBeCompletedThroughGenericHumanCompletion() {
+    SliceContext context = new SliceContext("connector-bypass");
+    KeyHandoverState state = context.submit();
+    state = context.claim(state, ClearanceBranch.FINANCE, context.financeActor());
+    KeyHandoverState financeClaimed = state;
+    assertThrows(
+        ValidationFailedException.class,
+        () ->
+            context.service.completeBranch(
+                context.completion(
+                    financeClaimed,
+                    ClearanceBranch.FINANCE,
+                    ClearanceOutcome.GREEN,
+                    context.financeActor())));
+    assertEquals(0, context.finance.calls());
+    state = context.claim(state, ClearanceBranch.LEGAL, context.legalActor());
+    KeyHandoverState legalClaimed = state;
+    assertThrows(
+        ValidationFailedException.class,
+        () ->
+            context.service.completeBranch(
+                context.completion(
+                    legalClaimed,
+                    ClearanceBranch.LEGAL,
+                    ClearanceOutcome.RED,
+                    context.legalActor())));
+    assertEquals(0, context.legal.calls());
+    KeyHandoverState legal =
+        context.service.completeLegalBranch(
+            legalClaimed.requestId(),
+            context.legalActor(),
+            ClearanceOutcome.RED,
+            legalClaimed.stateVersion(),
+            context.correlation(),
+            context.causation("legal"));
+    assertEquals(
+        ClearanceOutcome.RED, legal.branches().get(ClearanceBranch.LEGAL).outcome().orElseThrow());
+    assertEquals(1, context.legal.calls());
+  }
+
+  @Test
+  void conflictingDuplicateCompletionRemainsRecoverableWhenAuditDeliveryFails() throws Exception {
+    Path location = Files.createTempFile("key-handover-conflict", ".snapshot");
+    SliceContext context =
+        new SliceContext("conflict-audit", new TestOnlyPathBackedKeyHandoverStateStore(location));
+    KeyHandoverState state = context.submit();
+    state = context.claim(state, ClearanceBranch.HANDOVER, context.handoverActor());
+    state =
+        context.complete(
+            state, ClearanceBranch.HANDOVER, ClearanceOutcome.GREEN, context.handoverActor());
+    context.audit.failNext();
+    KeyHandoverState completed = state;
+    assertThrows(
+        ConflictingDuplicateCompletionException.class,
+        () ->
+            context.service.completeBranch(
+                context.completion(
+                    completed,
+                    ClearanceBranch.HANDOVER,
+                    ClearanceOutcome.RED,
+                    context.handoverActor())));
+    assertTrue(
+        context.store.pendingAudits().stream()
+            .anyMatch(audit -> audit.eventType().equals("ConflictingDuplicateCompletionRejected")));
+    SliceContext reconstructed =
+        new SliceContext("conflict-audit", new TestOnlyPathBackedKeyHandoverStateStore(location));
+    reconstructed.service.deliverPendingAudits();
+    assertTrue(reconstructed.audit.hasEvent("ConflictingDuplicateCompletionRejected"));
+  }
+
+  @Test
+  void claimsAreIdempotentForTheAssigneeAndRejectTaskStealing() {
+    SliceContext context = new SliceContext("task-stealing");
+    KeyHandoverState state = context.submit();
+    KeyHandoverState claimed =
+        context.claim(state, ClearanceBranch.HANDOVER, context.handoverActor());
+    assertEquals(
+        claimed,
+        context.service.claimTask(
+            claimed.requestId(),
+            ClearanceBranch.HANDOVER,
+            context.handoverActor(),
+            claimed.stateVersion(),
+            context.correlation(),
+            context.causation("repeat-claim")));
+    Actor other =
+        context.actor(
+            "other-handover",
+            EnumSet.of(Permission.CLAIM_TASK),
+            Set.of("handover-scope"),
+            context.handoverRole());
+    assertThrows(
+        AuthorizationDeniedException.class,
+        () ->
+            context.service.claimTask(
+                claimed.requestId(),
+                ClearanceBranch.HANDOVER,
+                other,
+                claimed.stateVersion(),
+                context.correlation(),
+                context.causation("steal")));
+  }
+
+  @Test
+  void reassignmentRejectsACompletedBranchActorAsTheNewAssignee() {
+    SliceContext context = new SliceContext("reassignment-sod");
+    Actor dualDutyActor =
+        new Actor(
+            new ActorId("dual-duty"),
+            EnumSet.allOf(Permission.class),
+            Set.of("handover-scope", "finance-scope"),
+            Set.of(context.handoverRole(), new TeamOrRoleRef("finance-role")));
+    KeyHandoverState state = context.submit();
+    state = context.claim(state, ClearanceBranch.HANDOVER, dualDutyActor);
+    state =
+        context.complete(state, ClearanceBranch.HANDOVER, ClearanceOutcome.GREEN, dualDutyActor);
+    state = context.claim(state, ClearanceBranch.FINANCE, context.financeActor());
+    KeyHandoverState financeClaimed = state;
+    assertThrows(
+        AuthorizationDeniedException.class,
+        () ->
+            context.service.reassignTask(
+                new TaskReassignment(
+                    financeClaimed.requestId(),
+                    ClearanceBranch.FINANCE,
+                    context.reassigner(),
+                    dualDutyActor,
+                    financeClaimed.stateVersion(),
+                    context.correlation(),
+                    context.causation("normal-sod"))));
+    assertThrows(
+        AuthorizationDeniedException.class,
+        () ->
+            context.service.emergencyReassign(
+                new EmergencyReassignment(
+                    financeClaimed.requestId(),
+                    ClearanceBranch.FINANCE,
+                    context.teamHead(),
+                    dualDutyActor,
+                    "synthetic reason",
+                    START.plusSeconds(60),
+                    financeClaimed.stateVersion(),
+                    context.correlation(),
+                    context.causation("emergency-sod"))));
+  }
+
+  @Test
+  void automaticAssignmentUsesTheExplicitPortAndCannotBeManuallyOverridden() {
+    SlicePolicies automaticPolicies = policiesWithAutomaticHandover();
+    SliceContext context =
+        new SliceContext(
+            "automatic-assignment", new InMemoryKeyHandoverStateStore(), automaticPolicies);
+    KeyHandoverState state = context.submit();
+    BranchState automatic = state.branches().get(ClearanceBranch.HANDOVER);
+    assertEquals(Optional.of(context.handoverActor().actorId()), automatic.assignedTo());
+    assertEquals(
+        state,
+        context.service.claimTask(
+            state.requestId(),
+            ClearanceBranch.HANDOVER,
+            context.handoverActor(),
+            state.stateVersion(),
+            context.correlation(),
+            context.causation("manual-override")));
+    Actor otherEligible =
+        context.actor(
+            "other-handover",
+            EnumSet.of(Permission.CLAIM_TASK),
+            Set.of("handover-scope"),
+            context.handoverRole());
+    assertThrows(
+        AuthorizationDeniedException.class,
+        () ->
+            context.service.claimTask(
+                state.requestId(),
+                ClearanceBranch.HANDOVER,
+                otherEligible,
+                state.stateVersion(),
+                context.correlation(),
+                context.causation("automatic-steal")));
+    assertThrows(
+        AuthorizationDeniedException.class,
+        () ->
+            context.service.completeFinanceBranch(
+                state.requestId(),
+                context.financeActor(),
+                state.stateVersion(),
+                context.correlation(),
+                context.causation("manual-required")));
   }
 
   @Test
@@ -409,7 +611,12 @@ final class KeyHandoverSliceIntegrationTest {
     CausationId causation = new CausationId("cause-command");
     KeyHandoverState decided =
         context.service.completeLegalBranch(
-            state.requestId(), context.legalActor(), state.stateVersion(), correlation, causation);
+            state.requestId(),
+            context.legalActor(),
+            ClearanceOutcome.GREEN,
+            state.stateVersion(),
+            correlation,
+            causation);
     assertEquals(correlation, decided.finalDecision().orElseThrow().correlationId());
     assertEquals(causation, decided.finalDecision().orElseThrow().causationId());
     assertEquals(1, context.legal.calls());
@@ -429,16 +636,21 @@ final class KeyHandoverSliceIntegrationTest {
     final RecordingAuditSink audit = new RecordingAuditSink();
     final RecordingRetryScheduler scheduler = new RecordingRetryScheduler();
     final KeyHandoverStateStore store;
-    final SlicePolicies policies = policies();
+    final SlicePolicies policies;
     final KeyHandoverApplicationService service;
 
     SliceContext(String key) {
-      this(key, new InMemoryKeyHandoverStateStore());
+      this(key, new InMemoryKeyHandoverStateStore(), policies());
     }
 
     SliceContext(String key, KeyHandoverStateStore store) {
+      this(key, store, policies());
+    }
+
+    SliceContext(String key, KeyHandoverStateStore store, SlicePolicies policies) {
       businessKey = new BusinessKey(key);
       this.store = store;
+      this.policies = policies;
       finance.setClearance(
           new FinanceClearance(
               BigDecimal.ZERO, ClearanceOutcome.GREEN, new EvidenceReference("finance-evidence")));
@@ -460,6 +672,7 @@ final class KeyHandoverSliceIntegrationTest {
           stateStore,
           new PermissionAuthorizationService(),
           scheduler,
+          new FixedAutomaticAssignmentService(handoverActor()),
           policies);
     }
 
@@ -500,7 +713,12 @@ final class KeyHandoverSliceIntegrationTest {
 
     KeyHandoverState completeLegal(KeyHandoverState state) {
       return service.completeLegalBranch(
-          state.requestId(), legalActor(), state.stateVersion(), correlation(), causation("legal"));
+          state.requestId(),
+          legalActor(),
+          ClearanceOutcome.GREEN,
+          state.stateVersion(),
+          correlation(),
+          causation("legal"));
     }
 
     BranchCompletion completion(
@@ -604,6 +822,23 @@ final class KeyHandoverSliceIntegrationTest {
   private static SlicePolicies policies() {
     Map<ClearanceBranch, HumanTaskPolicy> policies = new EnumMap<>(ClearanceBranch.class);
     policies.put(ClearanceBranch.HANDOVER, task("handover-role", "handover", "handover-scope"));
+    policies.put(ClearanceBranch.FINANCE, task("finance-role", "finance", "finance-scope"));
+    policies.put(ClearanceBranch.LEGAL, task("legal-role", "legal", "legal-scope"));
+    return new SlicePolicies(policies, new PolicyRef("decision-v1"), 2, Duration.ofSeconds(5));
+  }
+
+  private static SlicePolicies policiesWithAutomaticHandover() {
+    Map<ClearanceBranch, HumanTaskPolicy> policies = new EnumMap<>(ClearanceBranch.class);
+    policies.put(
+        ClearanceBranch.HANDOVER,
+        new HumanTaskPolicy(
+            new TeamOrRoleRef("handover-role"),
+            AssignmentMode.AUTOMATIC,
+            new PolicyRef("handover-assignment"),
+            new PolicyRef("handover-sla"),
+            new PolicyRef("handover-escalation"),
+            1,
+            Set.of("handover-scope")));
     policies.put(ClearanceBranch.FINANCE, task("finance-role", "finance", "finance-scope"));
     policies.put(ClearanceBranch.LEGAL, task("legal-role", "legal", "legal-scope"));
     return new SlicePolicies(policies, new PolicyRef("decision-v1"), 2, Duration.ofSeconds(5));
