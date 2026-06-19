@@ -1,0 +1,12 @@
+node_modules
+target
+dist
+coverage
+package-lock.json
+dependency-check-report.*
+docs/dependency-inventory.md
+AGENTS.md
+CODEX_FIRST_PROMPT.md
+README.md
+architecture/*.md
+tasks/*.md
