@@ -1,4 +1,4 @@
-package com.sevenewf.workflow.contracts;
+package com.sevenewf.workflow.domain.common;
 
 public enum DataClassification {
   PUBLIC,

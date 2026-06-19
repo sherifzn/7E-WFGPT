@@ -39,6 +39,8 @@ final class ForbiddenProductionIntegrationTest {
   private static boolean isScannedFile(Path path) {
     String normalized = path.toString();
     return (normalized.contains("/backend/src/")
+            || normalized.contains("/domain/src/")
+            || normalized.contains("/adapters/src/")
             || normalized.contains("/contracts/src/")
             || normalized.contains("/frontend/src/"))
         && !normalized.contains("/.git/")

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.enterprise-workflow.local/domain/workflow-instance.schema.json",
+  "title": "WorkflowInstance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "stateVersion",
+    "workflowVersionId",
+    "status",
+    "tenantScope",
+    "correlationId",
+    "createdAt",
+    "dataClassification"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/typedId" },
+    "stateVersion": { "$ref": "#/$defs/version" },
+    "workflowVersionId": { "$ref": "#/$defs/typedId" },
+    "status": { "type": "string" },
+    "tenantScope": { "$ref": "#/$defs/typedId" },
+    "correlationId": { "$ref": "#/$defs/typedId" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "dataClassification": { "$ref": "#/$defs/dataClassification" }
+  },
+  "$defs": {
+    "typedId": {
+      "type": "object",
+      "required": ["value"],
+      "properties": { "value": { "type": "string", "minLength": 1 } }
+    },
+    "version": {
+      "type": "object",
+      "required": ["value"],
+      "properties": { "value": { "type": "integer", "minimum": 1 } }
+    },
+    "dataClassification": {
+      "type": "string",
+      "enum": ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED", "HIGHLY_RESTRICTED"]
+    }
+  }
+}

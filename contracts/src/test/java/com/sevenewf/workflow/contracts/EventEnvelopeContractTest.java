@@ -1,5 +1,6 @@
 package com.sevenewf.workflow.contracts;
 
+import com.sevenewf.workflow.domain.common.DataClassification;
 import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.Assertions;

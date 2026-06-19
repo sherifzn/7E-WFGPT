@@ -37,6 +37,8 @@ The first milestone is not a full low-code designer. It is a secure executable v
 
 Task 001 establishes repository foundations only. It includes a Java backend skeleton, TypeScript React frontend skeleton, shared contract module, architecture tests, local quality gates, and CI checks. It does not include workflow runtime behavior, business rules, Oracle connectivity, AI model calls, production credentials, or real customer data.
 
+Task 002 adds immutable core domain contracts in a pure Java `domain` module and keeps serialization schemas in the separate `adapters` module. It still does not implement workflow execution, persistence, REST APIs, Oracle integration, identity integration, AI functionality, or production infrastructure.
+
 ### Prerequisites
 
 - Java 21 or newer
