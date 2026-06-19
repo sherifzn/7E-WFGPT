@@ -2,18 +2,7 @@ package com.sevenewf.workflow.domain.keyhandover;
 
 import com.sevenewf.workflow.domain.common.DomainVersion;
 import com.sevenewf.workflow.domain.common.Validation;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.AuthorizationId;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.BranchState;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.BusinessKey;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.ChildWorkflowId;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.ClearanceBranch;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.FinalDecision;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.InspectionStatus;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.KeyHandoverRequestId;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.KeyReleaseAuthorization;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.OwnerReference;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.PropertyReference;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.RequestStatus;
+import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.*;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -30,7 +19,7 @@ public record KeyHandoverState(
     Map<ClearanceBranch, BranchState> branches,
     Optional<FinalDecision> finalDecision,
     Optional<KeyReleaseAuthorization> authorization,
-    Optional<AuthorizationId> notificationIdempotencyKey,
+    Optional<NotificationState> notificationState,
     Instant updatedAt) {
   public KeyHandoverState {
     Validation.requirePresent(requestId, "requestId");
@@ -45,8 +34,7 @@ public record KeyHandoverState(
     branches = Map.copyOf(Validation.requirePresent(branches, "branches"));
     finalDecision = finalDecision == null ? Optional.empty() : finalDecision;
     authorization = authorization == null ? Optional.empty() : authorization;
-    notificationIdempotencyKey =
-        notificationIdempotencyKey == null ? Optional.empty() : notificationIdempotencyKey;
+    notificationState = notificationState == null ? Optional.empty() : notificationState;
     Validation.requirePresent(updatedAt, "updatedAt");
   }
 
@@ -57,7 +45,7 @@ public record KeyHandoverState(
       Map<ClearanceBranch, BranchState> newBranches,
       Optional<FinalDecision> newFinalDecision,
       Optional<KeyReleaseAuthorization> newAuthorization,
-      Optional<AuthorizationId> newNotificationIdempotencyKey,
+      Optional<NotificationState> newNotificationState,
       Instant now) {
     return new KeyHandoverState(
         requestId,
@@ -71,7 +59,7 @@ public record KeyHandoverState(
         newBranches,
         newFinalDecision,
         newAuthorization,
-        newNotificationIdempotencyKey,
+        newNotificationState,
         now);
   }
 }

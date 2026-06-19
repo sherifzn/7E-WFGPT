@@ -39,7 +39,7 @@ Task 001 establishes repository foundations only. It includes a Java backend ske
 
 Task 002 adds immutable core domain contracts in a pure Java `domain` module and keeps serialization schemas in the separate `adapters` module. It still does not implement workflow execution, persistence, REST APIs, Oracle integration, identity integration, AI functionality, or production infrastructure.
 
-Task 003 adds the first executable Property Key Handover slice behind explicit ports with synthetic adapters only. Design notes are in `docs/key-handover-slice.md`; it still avoids production Oracle, identity, AI, workflow-engine, database, REST, and cloud-infrastructure choices.
+Task 003 adds the first executable Property Key Handover slice behind explicit ports with synthetic adapters only. Design notes are in `docs/key-handover-slice.md`; it still avoids production Oracle, identity, AI, workflow-engine, database, REST, and cloud-infrastructure choices. Test-only state adapters provide recoverable pending-audit and same-process reconstruction coverage; they are not a production persistence decision.
 
 ### Prerequisites
 

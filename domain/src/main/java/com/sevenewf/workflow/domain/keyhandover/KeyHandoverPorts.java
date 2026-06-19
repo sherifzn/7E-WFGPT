@@ -1,19 +1,8 @@
 package com.sevenewf.workflow.domain.keyhandover;
 
 import com.sevenewf.workflow.domain.common.DomainVersion;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.AuditRecord;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.BusinessKey;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.ChildWorkflowId;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.EvidenceReference;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.FinalDecision;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.FinanceClearance;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.IdempotencyKey;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.InspectionStatus;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.KeyHandoverRequestId;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.KeyReleaseAuthorization;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.OwnerReference;
-import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.PropertyReference;
-import java.time.Instant;
+import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.*;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
@@ -56,7 +45,11 @@ public final class KeyHandoverPorts {
   }
 
   public interface DecisionService {
-    FinalDecision decide(KeyHandoverState state, List<EvidenceReference> evidenceReferences);
+    FinalDecision decide(
+        KeyHandoverState state,
+        List<EvidenceReference> evidenceReferences,
+        com.sevenewf.workflow.domain.common.CorrelationId correlationId,
+        com.sevenewf.workflow.domain.common.CausationId causationId);
   }
 
   public interface AuditSink {
@@ -64,7 +57,11 @@ public final class KeyHandoverPorts {
   }
 
   public interface Clock {
-    Instant now();
+    java.time.Instant now();
+  }
+
+  public interface RetryScheduler {
+    void backoff(Duration delay, int failedAttempt, String operation);
   }
 
   public interface KeyHandoverStateStore {
@@ -72,17 +69,21 @@ public final class KeyHandoverPorts {
 
     Optional<KeyHandoverState> findById(KeyHandoverRequestId requestId);
 
-    KeyHandoverState insertIfAbsent(KeyHandoverState state);
+    KeyHandoverState insertIfAbsent(KeyHandoverState state, List<AuditRecord> pendingAudits);
 
-    KeyHandoverState save(KeyHandoverState state, DomainVersion expectedVersion);
+    KeyHandoverState commit(
+        KeyHandoverState state, DomainVersion expectedVersion, List<AuditRecord> pendingAudits);
+
+    List<AuditRecord> pendingAudits();
+
+    void markAuditDelivered(AuditRecord auditRecord);
   }
 
   public interface AuthorizationService {
-    void require(KeyHandoverTypes.Actor actor, KeyHandoverTypes.Permission permission);
+    void require(Actor actor, Permission permission);
   }
 
   public interface DelegationPolicy {
-    void verifyDelegationDoesNotIncreaseAuthority(
-        KeyHandoverTypes.Actor delegator, KeyHandoverTypes.Actor delegate);
+    void verifyDelegationDoesNotIncreaseAuthority(Actor delegator, Actor delegate);
   }
 }

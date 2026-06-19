@@ -46,6 +46,12 @@ public final class KeyHandoverTypes {
     }
   }
 
+  public record FailureReference(String value) {
+    public FailureReference {
+      Validation.requireText(value, "failureReference");
+    }
+  }
+
   public record IdempotencyKey(String value) {
     public IdempotencyKey {
       Validation.requireText(value, "idempotencyKey");
@@ -95,7 +101,6 @@ public final class KeyHandoverTypes {
   }
 
   public enum RequestStatus {
-    SUBMITTED,
     WAITING_FOR_INSPECTION,
     CLEARANCE_IN_PROGRESS,
     AUTHORIZED,
@@ -115,19 +120,34 @@ public final class KeyHandoverTypes {
     EXCEPTION_APPROVAL_REQUIRED
   }
 
+  public enum NotificationDeliveryStatus {
+    NOT_REQUIRED,
+    PENDING,
+    DELIVERED,
+    FAILED
+  }
+
   public enum Permission {
+    SUBMIT_REQUEST,
     VIEW_TASK,
     CLAIM_TASK,
     COMPLETE_TASK,
     REASSIGN_TASK,
-    EMERGENCY_REASSIGN
+    EMERGENCY_REASSIGN,
+    RETRY_NOTIFICATION
   }
 
-  public record Actor(ActorId actorId, Set<Permission> permissions, Set<String> authorityScopes) {
+  public record Actor(
+      ActorId actorId,
+      Set<Permission> permissions,
+      Set<String> authorityScopes,
+      Set<TeamOrRoleRef> eligibleTeamsOrRoles) {
     public Actor {
       Validation.requirePresent(actorId, "actorId");
       permissions = Set.copyOf(Validation.requirePresent(permissions, "permissions"));
       authorityScopes = Set.copyOf(Validation.requirePresent(authorityScopes, "authorityScopes"));
+      eligibleTeamsOrRoles =
+          Set.copyOf(Validation.requirePresent(eligibleTeamsOrRoles, "eligibleTeamsOrRoles"));
     }
 
     public boolean can(Permission permission) {
@@ -162,17 +182,14 @@ public final class KeyHandoverTypes {
       Duration retryBackoff) {
     public SlicePolicies {
       taskPolicies = Map.copyOf(Validation.requirePresent(taskPolicies, "taskPolicies"));
-      for (ClearanceBranch branch : ClearanceBranch.values()) {
-        if (!taskPolicies.containsKey(branch)) {
+      for (ClearanceBranch branch : ClearanceBranch.values())
+        if (!taskPolicies.containsKey(branch))
           throw new IllegalArgumentException("task policy missing for " + branch);
-        }
-      }
       Validation.requirePresent(decisionPolicyVersion, "decisionPolicyVersion");
       Validation.requirePositive(maxConnectorAttempts, "maxConnectorAttempts");
       retryBackoff = Validation.requirePresent(retryBackoff, "retryBackoff");
-      if (retryBackoff.isNegative()) {
+      if (retryBackoff.isNegative())
         throw new IllegalArgumentException("retryBackoff must not be negative");
-      }
     }
   }
 
@@ -198,6 +215,23 @@ public final class KeyHandoverTypes {
     public InspectionStatus {
       existingChildWorkflowId =
           existingChildWorkflowId == null ? Optional.empty() : existingChildWorkflowId;
+    }
+  }
+
+  public record InspectionAvailable(
+      KeyHandoverRequestId requestId,
+      DomainVersion expectedStateVersion,
+      Actor actor,
+      CorrelationId correlationId,
+      CausationId causationId,
+      EvidenceReference inspectionEvidence) {
+    public InspectionAvailable {
+      Validation.requirePresent(requestId, "requestId");
+      Validation.requirePresent(expectedStateVersion, "expectedStateVersion");
+      Validation.requirePresent(actor, "actor");
+      Validation.requirePresent(correlationId, "correlationId");
+      Validation.requirePresent(causationId, "causationId");
+      Validation.requirePresent(inspectionEvidence, "inspectionEvidence");
     }
   }
 
@@ -231,6 +265,48 @@ public final class KeyHandoverTypes {
     }
   }
 
+  public record TaskReassignment(
+      KeyHandoverRequestId requestId,
+      ClearanceBranch branch,
+      Actor reassignedBy,
+      Actor newAssignee,
+      DomainVersion expectedStateVersion,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    public TaskReassignment {
+      Validation.requirePresent(requestId, "requestId");
+      Validation.requirePresent(branch, "branch");
+      Validation.requirePresent(reassignedBy, "reassignedBy");
+      Validation.requirePresent(newAssignee, "newAssignee");
+      Validation.requirePresent(expectedStateVersion, "expectedStateVersion");
+      Validation.requirePresent(correlationId, "correlationId");
+      Validation.requirePresent(causationId, "causationId");
+    }
+  }
+
+  public record EmergencyReassignment(
+      KeyHandoverRequestId requestId,
+      ClearanceBranch branch,
+      Actor teamHead,
+      Actor newAssignee,
+      String reason,
+      Instant expiresAt,
+      DomainVersion expectedStateVersion,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    public EmergencyReassignment {
+      Validation.requirePresent(requestId, "requestId");
+      Validation.requirePresent(branch, "branch");
+      Validation.requirePresent(teamHead, "teamHead");
+      Validation.requirePresent(newAssignee, "newAssignee");
+      reason = Validation.requireText(reason, "reason");
+      Validation.requirePresent(expiresAt, "expiresAt");
+      Validation.requirePresent(expectedStateVersion, "expectedStateVersion");
+      Validation.requirePresent(correlationId, "correlationId");
+      Validation.requirePresent(causationId, "causationId");
+    }
+  }
+
   public record BranchState(
       ClearanceBranch branch,
       BranchStatus status,
@@ -255,24 +331,10 @@ public final class KeyHandoverTypes {
       slaBreachedAt = slaBreachedAt == null ? Optional.empty() : slaBreachedAt;
     }
 
-    public BranchState claimedBy(ActorId actorId) {
+    public BranchState assignedTo(ActorId actorId) {
       return new BranchState(
           branch,
           BranchStatus.CLAIMED,
-          taskPolicy,
-          Optional.of(actorId),
-          completedBy,
-          outcome,
-          evidenceReferences,
-          openedAt,
-          slaWarningAt,
-          slaBreachedAt);
-    }
-
-    public BranchState reassignedTo(ActorId actorId) {
-      return new BranchState(
-          branch,
-          status,
           taskPolicy,
           Optional.of(actorId),
           completedBy,
@@ -344,6 +406,19 @@ public final class KeyHandoverTypes {
     }
   }
 
+  public record NotificationState(
+      IdempotencyKey idempotencyKey,
+      NotificationDeliveryStatus status,
+      int attemptCount,
+      Optional<FailureReference> lastFailureReference) {
+    public NotificationState {
+      Validation.requirePresent(idempotencyKey, "idempotencyKey");
+      Validation.requirePresent(status, "status");
+      if (attemptCount < 0) throw new IllegalArgumentException("attemptCount must not be negative");
+      lastFailureReference = lastFailureReference == null ? Optional.empty() : lastFailureReference;
+    }
+  }
+
   public record AuditRecord(
       String eventType,
       KeyHandoverRequestId requestId,
@@ -352,7 +427,8 @@ public final class KeyHandoverTypes {
       CausationId causationId,
       ActorId actorId,
       Instant occurredAt,
-      List<EvidenceReference> evidenceReferences) {
+      List<EvidenceReference> evidenceReferences,
+      Map<String, String> metadata) {
     public AuditRecord {
       eventType = Validation.requireText(eventType, "eventType");
       Validation.requirePresent(requestId, "requestId");
@@ -362,29 +438,7 @@ public final class KeyHandoverTypes {
       Validation.requirePresent(actorId, "actorId");
       Validation.requirePresent(occurredAt, "occurredAt");
       evidenceReferences = Validation.requireList(evidenceReferences, "evidenceReferences");
-    }
-  }
-
-  public record EmergencyReassignment(
-      KeyHandoverRequestId requestId,
-      ClearanceBranch branch,
-      Actor teamHead,
-      ActorId newAssignee,
-      String reason,
-      Instant expiresAt,
-      DomainVersion expectedStateVersion,
-      CorrelationId correlationId,
-      CausationId causationId) {
-    public EmergencyReassignment {
-      Validation.requirePresent(requestId, "requestId");
-      Validation.requirePresent(branch, "branch");
-      Validation.requirePresent(teamHead, "teamHead");
-      Validation.requirePresent(newAssignee, "newAssignee");
-      reason = Validation.requireText(reason, "reason");
-      Validation.requirePresent(expiresAt, "expiresAt");
-      Validation.requirePresent(expectedStateVersion, "expectedStateVersion");
-      Validation.requirePresent(correlationId, "correlationId");
-      Validation.requirePresent(causationId, "causationId");
+      metadata = Map.copyOf(Validation.requirePresent(metadata, "metadata"));
     }
   }
 }

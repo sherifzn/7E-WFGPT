@@ -2,7 +2,7 @@
 
 ## Scope
 
-Task 003 implements the Property Key Handover vertical slice only. It proves the first executable architecture path with a pure domain service, explicit ports, synthetic adapters, in-memory durable test state, and integration tests.
+Task 003 implements the Property Key Handover vertical slice only. It proves the first executable architecture path with a pure domain service, explicit ports, synthetic adapters, recoverable pending-audit transitions, and integration tests.
 
 ## Affected modules
 
@@ -14,8 +14,8 @@ Task 003 implements the Property Key Handover vertical slice only. It proves the
 
 1. A synthetic front-door submission validates property and owner references through typed connector ports.
 2. Inspection status is checked through the inspection connector.
-3. A missing inspection correlates with an existing child workflow or starts exactly one child workflow using a deterministic idempotency key.
-4. Handover, Finance, and Legal branches are represented as logically parallel human tasks.
+3. A missing inspection correlates with an existing child workflow or starts exactly one child workflow using a deterministic idempotency key, then persists `WAITING_FOR_INSPECTION` without opening clearance work.
+4. An explicit, idempotent inspection-available command moves the request to `CLEARANCE_IN_PROGRESS` and opens Handover, Finance, and Legal branches.
 5. Human tasks carry configurable eligibility, assignment mode, assignment policy reference, SLA policy reference, escalation policy reference, task weight, and authority scopes.
 6. Finance returns a synthetic outstanding-amount result through `FinanceConnector`; no direct Oracle access exists.
 7. Branches produce GREEN, AMBER, or RED outcomes with evidence references only.
@@ -29,32 +29,35 @@ Task 003 implements the Property Key Handover vertical slice only. It proves the
 - External systems are represented only by ports and synthetic adapters.
 - No production identity provider, Oracle connection, document store, AI model, network integration, credentials, customer data, legal evidence, financial records, or identity documents are used.
 - Evidence is represented by references rather than payloads.
-- Task view, claim, completion, and emergency reassignment require authorization checks.
-- Segregation of duties is checked at claim and completion.
-- Emergency reassignment requires a Team Head permission, reason, future expiry, and audit event.
+- Submission uses a dedicated `SUBMIT_REQUEST` permission; task view, claim, completion, normal reassignment, and emergency reassignment require their respective permissions.
+- Claim, completion, reassignment, and emergency reassignment enforce policy eligibility, authority scopes, assignment mode, assigned actor, and segregation of duties where applicable.
+- Emergency reassignment requires permission, new-assignee eligibility and authority, a reason, future expiry, and audit metadata containing reason, expiry, previous assignee, and new assignee.
 - Delegation checks are modeled so delegation cannot increase authority.
 
 ## Durability and recovery
 
-- `KeyHandoverStateStore` is a persistence port, not a production database choice.
-- The synthetic adapter stores state in memory for tests and enforces optimistic state-version checks.
-- Restart behavior is tested by reconstructing the application service over the same state store.
+- `KeyHandoverStateStore` is a persistence port, not a production database choice. It commits each state transition together with pending immutable audit records.
+- The synthetic in-memory store is fast-test-only. A clearly labeled test-only path-backed snapshot adapter proves reconstruction from the same test storage location in-process; it is not production durability.
+- Pending audits remain recoverable if sink delivery fails and are retried idempotently after reconstruction.
 - `DomainVersion stateVersion` is mandatory on state and expected by state-changing commands to support future optimistic concurrency and event ordering.
-- Notification failure after authorization is recorded as `NOTIFICATION_FAILED`; persistence and retry orchestration remain production ADR topics.
+- Notification idempotency uses `IdempotencyKey`. Delivery status, attempt count, and a non-sensitive failure reference are persisted. Explicit recovery retries notification delivery without duplicate successful sends.
+- Connector retries use the configured attempt count and retry backoff through a scheduler port; deterministic tests never sleep.
 
 ## Tests added
 
-- Valid submission opens configured human tasks.
+- Valid submission opens configured human tasks only when inspection is available.
+- The inspection barrier blocks task operations, SLA evaluation, and final decision work until an idempotent inspection-resume command succeeds.
 - Missing inspection starts exactly one idempotent child workflow.
 - Existing inspection child workflow is correlated rather than recreated.
 - Branches complete in different orders and final decision waits for all branches.
 - GREEN, AMBER, and RED outcomes produce deterministic actions.
 - Duplicate completion is idempotent and conflicting duplicate completion is rejected and audited.
 - State versions protect optimistic concurrency.
-- Service restart continues from the same durable store.
-- Transient connector failure retries and then exhausts deterministically.
-- Notification failure is surfaced and recorded after authorization state changes.
-- Unauthorized task access, SLA warnings/breaches, emergency reassignment, and segregation of duties are enforced.
+- Test-only path-backed state reconstruction continues from the same test storage location.
+- Transient connector failures use configured backoff requests, then exhaust deterministically; validation and authorization failures are not retried.
+- Notification failure, retry, delivery, and retry exhaustion have explicit durable audit behavior.
+- Unauthorized and stale finance completion cannot trigger connector side effects; legal and evidence ports are exercised through the application service.
+- SLA warnings/breaches audit only newly recorded thresholds; no-op evaluation does not advance state version.
 - Delegation does not increase authority.
 - Audit sink failure is not swallowed and leaves state recoverable for test-only inspection.
 
@@ -65,18 +68,18 @@ No new external dependency was introduced for Task 003. The slice uses the exist
 ## Known limitations
 
 - This is not a generic workflow engine, low-code designer, REST API, production database integration, production connector implementation, AI gateway, or cloud infrastructure.
-- The synthetic state store is test-only and does not provide transactional coupling between state persistence and audit persistence.
-- Timer scheduling, durable queueing, worker leasing, distributed locks, compensation, and production retry backoff are out of scope.
+- The test-only path-backed adapter is same-process reconstruction coverage, not crash-safe, multi-process, or production persistence.
+- No production transactional outbox, durable queue, audit delivery worker, timer scheduling, worker leasing, distributed lock, compensation, or retry scheduler has been selected.
 - Business thresholds, role names, team names, SLA values, authority limits, and routing rules remain configuration or BRE/DMN concerns and are not hard-coded into domain logic.
 - The deterministic decision service is a slice placeholder behind `DecisionService`; BRE/DMN ownership requires an ADR before production implementation.
 
 ## Unresolved ADRs
 
 - Production workflow runtime engine and durable state-transition model.
-- Runtime database, transactional outbox, and immutable audit store.
+- Runtime database, transactional outbox, immutable audit store, and audit-delivery retry ownership.
 - BRE/DMN engine and decision policy publication model.
 - Production Oracle connector pattern and financial payload classification.
 - Identity federation, authorization policy engine, and delegation authority model.
 - Evidence/document storage and retention model.
-- Notification provider and retry/dead-letter strategy.
+- Notification provider, durable retry scheduler, and dead-letter strategy.
 - Hosting, observability, secrets management, and disaster recovery.
