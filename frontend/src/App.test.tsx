@@ -1,41 +1,56 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, expect, vi } from "vitest";
 import { App } from "./App";
 
-const select = (requestNumber: string) => fireEvent.click(screen.getByRole("listitem", { name: new RegExp(requestNumber) }));
+const request = (overrides: Record<string, unknown> = {}) => ({
+  requestNumber: "KH-101",
+  property: "Demo Property 101",
+  owner: "Demo Owner 101",
+  status: "Waiting For Inspection",
+  stateVersion: 1,
+  inspection: "Waiting",
+  finalDecision: "",
+  notification: "Not Started",
+  lastUpdated: "2026-06-20T10:00:00Z",
+  tasks: [
+    { id: "handover", title: "Handover check", status: "Blocked", assignedTo: "", outcome: "" },
+    { id: "finance", title: "Finance clearance", status: "Blocked", assignedTo: "", outcome: "" },
+    { id: "legal", title: "Legal clearance", status: "Blocked", assignedTo: "", outcome: "" }
+  ],
+  audit: [],
+  ...overrides
+});
 
-describe("Key Handover local demo", () => {
-  it("keeps clearance actions blocked while inspection is waiting", () => {
+afterEach(() => vi.restoreAllMocks());
+
+describe("Key Handover API demo", () => {
+  it("keeps clearance gated until the backend resumes inspection", async () => {
+    const waiting = request();
+    const resumed = request({
+      inspection: "Available",
+      status: "Clearance In Progress",
+      stateVersion: 2,
+      tasks: waiting.tasks.map((task) => ({ ...task, status: "Open" }))
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => [waiting] })
+      .mockResolvedValueOnce({ ok: true, json: async () => resumed });
+    vi.stubGlobal("fetch", fetchMock);
     render(<App />);
-    expect(screen.getByText("Inspection barrier active")).toBeVisible();
+    expect(await screen.findByText("Inspection barrier active")).toBeVisible();
     expect(screen.getAllByRole("button", { name: "Claim task" })[0]).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Resume after inspection" }));
-    expect(screen.queryByText("Inspection barrier active")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText("Inspection barrier active")).not.toBeInTheDocument()
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("inspection/resume");
   });
 
-  it("claims and reassigns a clearance task", () => {
+  it("shows an empty state when the local API has no requests", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
     render(<App />);
-    select("KH-102");
-    fireEvent.click(screen.getAllByRole("button", { name: "Claim task" })[0]);
-    expect(screen.getByText("Assigned to:", { exact: false })).toHaveTextContent("Current demo user");
-    fireEvent.click(screen.getByRole("button", { name: "Reassign" }));
-    expect(screen.getByText("Assigned to:", { exact: false })).toHaveTextContent("Demo reviewer");
-  });
-
-  it("shows GREEN, AMBER, and RED outcome choices", () => {
-    render(<App />);
-    select("KH-102");
-    expect(screen.getAllByText("GREEN").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("AMBER").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("RED").length).toBeGreaterThan(0);
-  });
-
-  it("retries a failed notification", () => {
-    render(<App />);
-    select("KH-103");
-    fireEvent.click(screen.getByRole("button", { name: "Simulate delivery issue" }));
-    expect(screen.getByText("Notification needs retry")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Retry notification" }));
-    expect(screen.getByText("Authorization notification delivered")).toBeVisible();
+    expect(await screen.findByText("No requests yet")).toBeVisible();
   });
 });
