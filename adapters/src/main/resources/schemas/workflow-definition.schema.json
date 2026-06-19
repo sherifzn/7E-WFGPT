@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.enterprise-workflow.local/domain/workflow-definition.schema.json",
+  "title": "WorkflowDefinition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "definitionVersion", "key", "displayName", "dataClassification", "activities"],
+  "properties": {
+    "id": { "$ref": "#/$defs/typedId" },
+    "definitionVersion": { "$ref": "#/$defs/version" },
+    "key": { "type": "string", "minLength": 1 },
+    "displayName": { "type": "string", "minLength": 1 },
+    "dataClassification": { "$ref": "#/$defs/dataClassification" },
+    "activities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "version", "key", "displayName", "dataClassification"]
+      }
+    }
+  },
+  "$defs": {
+    "typedId": {
+      "type": "object",
+      "required": ["value"],
+      "properties": { "value": { "type": "string", "minLength": 1 } }
+    },
+    "version": {
+      "type": "object",
+      "required": ["value"],
+      "properties": { "value": { "type": "integer", "minimum": 1 } }
+    },
+    "dataClassification": {
+      "type": "string",
+      "enum": ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED", "HIGHLY_RESTRICTED"]
+    }
+  }
+}

@@ -8,7 +8,9 @@
   <packaging>pom</packaging>
 
   <modules>
+    <module>domain</module>
     <module>contracts</module>
+    <module>adapters</module>
     <module>backend</module>
     <module>architecture-tests</module>
   </modules>

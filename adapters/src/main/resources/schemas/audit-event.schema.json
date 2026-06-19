@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.enterprise-workflow.local/domain/audit-event.schema.json",
+  "title": "AuditEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "correlationId",
+    "causationId",
+    "actorType",
+    "actorId",
+    "tenantScope",
+    "dataClassification",
+    "policyVersions",
+    "traceId"
+  ],
+  "properties": {
+    "eventId": { "$ref": "#/$defs/typedId" },
+    "eventType": { "type": "string", "minLength": 1 },
+    "eventVersion": { "$ref": "#/$defs/version" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "$ref": "#/$defs/typedId" },
+    "causationId": { "$ref": "#/$defs/typedId" },
+    "workflowInstanceId": { "$ref": "#/$defs/typedId" },
+    "taskInstanceId": { "$ref": "#/$defs/typedId" },
+    "actorType": { "type": "string", "enum": ["HUMAN", "SERVICE", "SYSTEM"] },
+    "actorId": { "$ref": "#/$defs/typedId" },
+    "tenantScope": { "$ref": "#/$defs/typedId" },
+    "dataClassification": { "$ref": "#/$defs/dataClassification" },
+    "policyVersions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "traceId": { "$ref": "#/$defs/typedId" }
+  },
+  "$defs": {
+    "typedId": {
+      "type": "object",
+      "required": ["value"],
+      "properties": { "value": { "type": "string", "minLength": 1 } }
+    },
+    "version": {
+      "type": "object",
+      "required": ["value"],
+      "properties": { "value": { "type": "integer", "minimum": 1 } }
+    },
+    "dataClassification": {
+      "type": "string",
+      "enum": ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED", "HIGHLY_RESTRICTED"]
+    }
+  }
+}

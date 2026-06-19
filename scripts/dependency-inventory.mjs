@@ -43,6 +43,7 @@ const inventory = [
     "typescript-eslint": "TypeScript linting support"
   }),
   ...mavenRows(),
+  ...internalModuleRows(),
   ""
 ].join("\n");
 
@@ -73,5 +74,12 @@ function mavenRows() {
     "| Maven plugin | `com.diffplug.spotless:spotless-maven-plugin` | Java and POM formatting checks | Apache-2.0 | Build-plugin supply chain risk | Used by Maven format checks |",
     "| Maven plugin | `org.apache.maven.plugins:maven-dependency-plugin` | Java dependency resolution and tree scanning | Apache-2.0 | Build-plugin supply chain risk | Used by dependency scan checks |",
     "| GitHub Action | `actions/dependency-review-action` | Pull-request dependency vulnerability review | MIT | CI supply chain risk | Runs only in pull-request checks |"
+  ];
+}
+
+function internalModuleRows() {
+  return [
+    "| Internal module | `adapters -> domain` | Keeps serialization schema access separate from pure domain contracts | Internal project code | No third-party supply chain impact | Built in the Maven reactor |",
+    "| Internal module | `architecture-tests -> domain/adapters/backend/contracts` | Verifies module dependency boundaries and forbidden integration markers | Internal project code | No third-party supply chain impact | Used by Maven test phase |"
   ];
 }
