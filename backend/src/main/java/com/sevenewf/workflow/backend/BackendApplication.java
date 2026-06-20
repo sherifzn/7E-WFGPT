@@ -18,6 +18,7 @@ public final class BackendApplication {
     Path dataDirectory = Path.of(System.getProperty("workflow.local.data.dir", "local-data"));
     HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
     server.createContext("/health", new HealthEndpoint());
+    server.createContext("/api/health", new HealthEndpoint());
     server.createContext("/api/key-handovers", new KeyHandoverDemoHttpHandler(dataDirectory));
     server.start();
     LOGGER.info("backend_started", "port=" + port);
