@@ -5,12 +5,17 @@ import com.sun.net.httpserver.HttpHandler;
 import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** Local-only HTTP adapter for the synthetic Key Handover demonstration. */
 public final class KeyHandoverDemoHttpHandler implements HttpHandler {
-  private final KeyHandoverDemoService service = new KeyHandoverDemoService();
+  private final KeyHandoverDemoService service;
+
+  public KeyHandoverDemoHttpHandler(Path dataDirectory) {
+    service = new KeyHandoverDemoService(dataDirectory);
+  }
 
   @Override
   public void handle(HttpExchange exchange) throws IOException {

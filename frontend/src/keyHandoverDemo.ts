@@ -8,6 +8,13 @@ export type RequestStatus =
 export type Outcome = "GREEN" | "AMBER" | "RED";
 export type TaskStatus = "Blocked" | "Open" | "Claimed" | "Completed";
 export type NotificationStatus = "Not started" | "Pending" | "Delivered" | "Failed";
+export type DevelopmentIdentity =
+  | "requester"
+  | "handoverOfficer"
+  | "financeOfficer"
+  | "legalOfficer"
+  | "teamHead"
+  | "processOwner";
 
 export interface AuditEvent {
   id: string;
@@ -38,8 +45,7 @@ export interface KeyHandoverRequest {
   audit: AuditEvent[];
 }
 
-const baseUrl =
-  import.meta.env.VITE_KEY_HANDOVER_API_URL ?? "http://localhost:8080/api/key-handovers";
+const baseUrl = import.meta.env.VITE_KEY_HANDOVER_API_URL ?? "/api/key-handovers";
 
 async function request<T>(path = "", options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -54,10 +60,10 @@ async function request<T>(path = "", options: RequestInit = {}): Promise<T> {
 
 export const keyHandoverApi = {
   list: () => request<KeyHandoverRequest[]>(),
-  create: (propertyReference: string, ownerReference: string) =>
+  create: (propertyReference: string, ownerReference: string, actor: DevelopmentIdentity) =>
     request<KeyHandoverRequest>("", {
       method: "POST",
-      body: new URLSearchParams({ propertyReference, ownerReference }).toString()
+      body: new URLSearchParams({ propertyReference, ownerReference, actor }).toString()
     }),
   action: (requestNumber: string, path: string, parameters: Record<string, string> = {}) =>
     request<KeyHandoverRequest>(`/${encodeURIComponent(requestNumber)}/${path}`, {

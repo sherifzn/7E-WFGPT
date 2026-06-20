@@ -8,4 +8,5 @@ coverage/
 .env
 .env.*
 !.env.example
+.local-dev/
 dependency-check-report.*

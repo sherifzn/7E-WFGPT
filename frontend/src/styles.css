@@ -138,6 +138,26 @@ h3 {
   font-size: 0.78rem;
   font-weight: 700;
 }
+.identity-selector {
+  display: grid;
+  gap: 4px;
+  color: #647993;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.identity-selector select {
+  min-width: 170px;
+  border: 1px solid #bfcede;
+  border-radius: 8px;
+  background: #fff;
+  color: #13233a;
+  font: inherit;
+  letter-spacing: normal;
+  padding: 8px 10px;
+  text-transform: none;
+}
 .barrier {
   background: #fff0d6;
   color: #8b5700;

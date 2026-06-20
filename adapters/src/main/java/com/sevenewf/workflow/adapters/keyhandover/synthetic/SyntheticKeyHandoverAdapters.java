@@ -116,14 +116,22 @@ public final class SyntheticKeyHandoverAdapters {
     protected void afterMutation() {}
   }
 
-  /** Test-only file-backed snapshot adapter; production persistence remains an ADR. */
-  public static final class TestOnlyPathBackedKeyHandoverStateStore
-      extends InMemoryKeyHandoverStateStore {
+  /**
+   * File-backed synthetic state store for local development and tests; production persistence
+   * remains an ADR.
+   */
+  public static class PathBackedKeyHandoverStateStore extends InMemoryKeyHandoverStateStore {
     private final Path location;
 
-    public TestOnlyPathBackedKeyHandoverStateStore(Path location) {
+    public PathBackedKeyHandoverStateStore(Path location) {
       this.location = location.toAbsolutePath().normalize();
       load();
+    }
+
+    public synchronized List<KeyHandoverState> states() {
+      return byId.values().stream()
+          .sorted(Comparator.comparing(KeyHandoverState::updatedAt).reversed())
+          .toList();
     }
 
     @Override
@@ -146,8 +154,7 @@ public final class SyntheticKeyHandoverAdapters {
           Files.move(temporary, location, StandardCopyOption.REPLACE_EXISTING);
         }
       } catch (IOException exception) {
-        throw new IllegalStateException(
-            "Unable to persist test-only key handover snapshot", exception);
+        throw new IllegalStateException("Unable to persist local key handover snapshot", exception);
       }
     }
 
@@ -159,9 +166,16 @@ public final class SyntheticKeyHandoverAdapters {
           StateFileCodec.read(data, byId, byBusinessKey, pending);
         }
       } catch (IOException exception) {
-        throw new IllegalStateException(
-            "Unable to load test-only key handover snapshot", exception);
+        throw new IllegalStateException("Unable to load local key handover snapshot", exception);
       }
+    }
+  }
+
+  /** Compatibility name retained for Task 003 tests. */
+  public static final class TestOnlyPathBackedKeyHandoverStateStore
+      extends PathBackedKeyHandoverStateStore {
+    public TestOnlyPathBackedKeyHandoverStateStore(Path location) {
+      super(location);
     }
   }
 

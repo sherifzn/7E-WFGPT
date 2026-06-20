@@ -1,29 +1,38 @@
 package com.sevenewf.workflow.backend.keyhandover;
 
+import com.sevenewf.workflow.adapters.keyhandover.synthetic.SyntheticKeyHandoverAdapters.PathBackedKeyHandoverStateStore;
 import com.sevenewf.workflow.domain.common.ActorId;
 import com.sevenewf.workflow.domain.common.CausationId;
 import com.sevenewf.workflow.domain.common.CorrelationId;
-import com.sevenewf.workflow.domain.common.DomainVersion;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverApplicationService;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverPorts.*;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverState;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.*;
 import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
 /** Synthetic-only local API facade. It translates requests to the Task 003 application service. */
 public final class KeyHandoverDemoService {
-  private final DemoStore store = new DemoStore();
+  private final PathBackedKeyHandoverStateStore store;
   private final DemoInspectionConnector inspections = new DemoInspectionConnector();
-  private final DemoAuditSink audits = new DemoAuditSink();
+  private final PersistentDemoAuditSink audits;
   private final DemoNotificationConnector notifications = new DemoNotificationConnector();
   private final KeyHandoverApplicationService service;
-  private final Map<String, BusinessKey> requests = new LinkedHashMap<>();
-  private int sequence = 105;
+  private final Path dataDirectory;
+  private int sequence;
 
   public KeyHandoverDemoService() {
+    this(Path.of("local-data"));
+  }
+
+  public KeyHandoverDemoService(Path dataDirectory) {
+    this.dataDirectory = dataDirectory;
+    store = new PathBackedKeyHandoverStateStore(dataDirectory.resolve("key-handover-state.bin"));
+    audits = new PersistentDemoAuditSink(dataDirectory.resolve("audit-events.tsv"));
     SlicePolicies policies = policies();
     service =
         new KeyHandoverApplicationService(
@@ -39,12 +48,13 @@ public final class KeyHandoverDemoService {
             Instant::now,
             store,
             (actor, permission) -> {
-              if (!actor.can(permission)) throw new IllegalArgumentException("Permission denied");
+              if (!actor.can(permission)) throw new SecurityException("Permission denied");
             },
             (delay, attempt, operation) -> {},
             policy -> actorFor(policy.eligibleTeamOrRole()),
             policies);
-    seed();
+    if (store.states().isEmpty()) seed();
+    sequence = nextSequence();
   }
 
   public ApiResponse handle(String method, String path, Map<String, String> parameters) {
@@ -58,9 +68,9 @@ public final class KeyHandoverDemoService {
       if ("GET".equals(method) && parts.length == 2 && "audit".equals(parts[1]))
         return ok(auditJson(state));
       if (!"POST".equals(method)) return notFound();
-      KeyHandoverState updated =
-          action(state, Arrays.copyOfRange(parts, 1, parts.length), parameters);
-      return ok(requestJson(updated));
+      return ok(requestJson(action(state, Arrays.copyOfRange(parts, 1, parts.length), parameters)));
+    } catch (SecurityException exception) {
+      return new ApiResponse(403, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
     } catch (RuntimeException exception) {
       return new ApiResponse(400, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
     }
@@ -77,10 +87,9 @@ public final class KeyHandoverDemoService {
                 new BusinessKey(number),
                 new PropertyReference(property),
                 new OwnerReference(owner),
-                submitter(),
+                actor(parameters),
                 correlation(number),
                 causation(number, "submit")));
-    requests.put(number, state.businessKey());
     return new ApiResponse(201, requestJson(state));
   }
 
@@ -92,28 +101,28 @@ public final class KeyHandoverDemoService {
           new InspectionAvailable(
               state.requestId(),
               state.stateVersion(),
-              submitter(),
+              actor(parameters),
               correlation(number),
               causation(number, "inspection"),
               new EvidenceReference("synthetic-inspection-" + number)));
     if (matches(action, "notification", "retry"))
       return service.retryNotification(
           state.requestId(),
-          retryActor(),
+          actor(parameters),
           state.stateVersion(),
           correlation(number),
           causation(number, "retry"));
     if (matches(action, "tasks", "finance", "complete"))
       return service.completeFinanceBranch(
           state.requestId(),
-          financeActor(),
+          actor(parameters),
           state.stateVersion(),
           correlation(number),
           causation(number, "finance"));
     if (matches(action, "tasks", "legal", "complete"))
       return service.completeLegalBranch(
           state.requestId(),
-          legalActor(),
+          actor(parameters),
           ClearanceOutcome.valueOf(parameters.getOrDefault("outcome", "GREEN")),
           state.stateVersion(),
           correlation(number),
@@ -125,7 +134,7 @@ public final class KeyHandoverDemoService {
               ClearanceBranch.HANDOVER,
               ClearanceOutcome.valueOf(parameters.getOrDefault("outcome", "GREEN")),
               List.of(new EvidenceReference("synthetic-handover-" + number)),
-              handoverActor(),
+              actor(parameters),
               state.stateVersion(),
               correlation(number),
               causation(number, "handover")));
@@ -134,7 +143,7 @@ public final class KeyHandoverDemoService {
       return service.claimTask(
           state.requestId(),
           branch,
-          actorForBranch(branch),
+          actor(parameters),
           state.stateVersion(),
           correlation(number),
           causation(number, "claim"));
@@ -145,8 +154,8 @@ public final class KeyHandoverDemoService {
           new TaskReassignment(
               state.requestId(),
               branch,
-              reassigner(),
-              actorForBranch(branch),
+              actor(parameters),
+              assignee(parameters, actorForBranch(branch)),
               state.stateVersion(),
               correlation(number),
               causation(number, "reassign")));
@@ -157,8 +166,8 @@ public final class KeyHandoverDemoService {
           new EmergencyReassignment(
               state.requestId(),
               branch,
-              teamHead(),
-              actorForBranch(branch),
+              actor(parameters),
+              assignee(parameters, actorForBranch(branch)),
               "synthetic local emergency reassignment",
               Instant.now().plus(Duration.ofMinutes(30)),
               state.stateVersion(),
@@ -202,7 +211,6 @@ public final class KeyHandoverDemoService {
                 submitter(),
                 correlation(number),
                 causation(number, "submit")));
-    requests.put(number, state.businessKey());
   }
 
   private void completeAllGreen(String number) {
@@ -248,15 +256,15 @@ public final class KeyHandoverDemoService {
   }
 
   private KeyHandoverState state(String number) {
-    BusinessKey key = requests.get(number);
-    if (key == null) throw new IllegalArgumentException("Unknown request");
-    return store.findByBusinessKey(key).orElseThrow();
+    return store
+        .findByBusinessKey(new BusinessKey(number))
+        .orElseThrow(() -> new IllegalArgumentException("Unknown request"));
   }
 
   private String listJson() {
     return "["
-        + requests.keySet().stream()
-            .map(number -> summaryJson(state(number)))
+        + store.states().stream()
+            .map(this::summaryJson)
             .collect(java.util.stream.Collectors.joining(","))
         + "]";
   }
@@ -320,21 +328,21 @@ public final class KeyHandoverDemoService {
   private String auditJson(KeyHandoverState state) {
     return "["
         + audits.records().stream()
-            .filter(record -> record.requestId().equals(state.requestId()))
+            .filter(record -> record.requestId().equals(state.requestId().value()))
             .map(
                 record ->
                     "{"
-                        + field("id", record.eventType() + "-" + record.stateVersion().value())
+                        + field("id", record.eventType() + "-" + record.stateVersion())
                         + ","
-                        + field("actor", record.actorId().value())
+                        + field("actor", record.actorId())
                         + ","
                         + field("eventType", record.eventType())
                         + ","
-                        + field("timestamp", record.occurredAt().toString())
+                        + field("timestamp", record.occurredAt())
                         + ","
-                        + field("correlationId", record.correlationId().value())
+                        + field("correlationId", record.correlationId())
                         + ","
-                        + field("causationId", record.causationId().value())
+                        + field("causationId", record.causationId())
                         + "}")
             .collect(java.util.stream.Collectors.joining(","))
         + "]";
@@ -404,6 +412,27 @@ public final class KeyHandoverDemoService {
     };
   }
 
+  private static Actor actor(Map<String, String> parameters) {
+    return actorForRole(required(parameters, "actor"));
+  }
+
+  private static Actor assignee(Map<String, String> parameters, Actor fallback) {
+    String role = parameters.get("assignee");
+    return role == null || role.isBlank() ? fallback : actorForRole(role);
+  }
+
+  private static Actor actorForRole(String role) {
+    return switch (role) {
+      case "requester" -> submitter();
+      case "handoverOfficer" -> handoverActor();
+      case "financeOfficer" -> financeActor();
+      case "legalOfficer" -> legalActor();
+      case "teamHead" -> teamHead();
+      case "processOwner" -> processOwner();
+      default -> throw new IllegalArgumentException("Unknown local development identity");
+    };
+  }
+
   private static Actor actorFor(TeamOrRoleRef role) {
     return switch (role.value()) {
       case "handover-role" -> handoverActor();
@@ -416,7 +445,7 @@ public final class KeyHandoverDemoService {
   private static Actor submitter() {
     return actor(
         "synthetic-front-desk",
-        EnumSet.allOf(Permission.class),
+        EnumSet.of(Permission.SUBMIT_REQUEST, Permission.VIEW_TASK),
         Set.of("submit-scope"),
         "submit-role");
   }
@@ -424,7 +453,7 @@ public final class KeyHandoverDemoService {
   private static Actor handoverActor() {
     return actor(
         "synthetic-handover-reviewer",
-        EnumSet.allOf(Permission.class),
+        EnumSet.of(Permission.CLAIM_TASK, Permission.COMPLETE_TASK, Permission.VIEW_TASK),
         Set.of("handover-scope"),
         "handover-role");
   }
@@ -432,7 +461,7 @@ public final class KeyHandoverDemoService {
   private static Actor financeActor() {
     return actor(
         "synthetic-finance-reviewer",
-        EnumSet.allOf(Permission.class),
+        EnumSet.of(Permission.CLAIM_TASK, Permission.COMPLETE_TASK, Permission.VIEW_TASK),
         Set.of("finance-scope"),
         "finance-role");
   }
@@ -440,7 +469,7 @@ public final class KeyHandoverDemoService {
   private static Actor legalActor() {
     return actor(
         "synthetic-legal-reviewer",
-        EnumSet.allOf(Permission.class),
+        EnumSet.of(Permission.CLAIM_TASK, Permission.COMPLETE_TASK, Permission.VIEW_TASK),
         Set.of("legal-scope"),
         "legal-role");
   }
@@ -453,7 +482,20 @@ public final class KeyHandoverDemoService {
   private static Actor teamHead() {
     return actor(
         "synthetic-team-head",
-        EnumSet.of(Permission.EMERGENCY_REASSIGN),
+        EnumSet.of(Permission.REASSIGN_TASK, Permission.EMERGENCY_REASSIGN, Permission.VIEW_TASK),
+        Set.of(),
+        "operations-role");
+  }
+
+  private static Actor processOwner() {
+    return actor(
+        "synthetic-process-owner",
+        EnumSet.of(
+            Permission.SUBMIT_REQUEST,
+            Permission.REASSIGN_TASK,
+            Permission.EMERGENCY_REASSIGN,
+            Permission.RETRY_NOTIFICATION,
+            Permission.VIEW_TASK),
         Set.of(),
         "operations-role");
   }
@@ -479,6 +521,16 @@ public final class KeyHandoverDemoService {
     return new CausationId("cause-" + number + "-" + action);
   }
 
+  private int nextSequence() {
+    return store.states().stream()
+            .map(state -> state.businessKey().value())
+            .filter(number -> number.matches("KH-\\d+"))
+            .mapToInt(number -> Integer.parseInt(number.substring(3)))
+            .max()
+            .orElse(104)
+        + 1;
+  }
+
   private static SlicePolicies policies() {
     Map<ClearanceBranch, HumanTaskPolicy> policies = new EnumMap<>(ClearanceBranch.class);
     policies.put(ClearanceBranch.HANDOVER, policy("handover-role", "handover", "handover-scope"));
@@ -500,50 +552,6 @@ public final class KeyHandoverDemoService {
   }
 
   public record ApiResponse(int status, String body) {}
-
-  private static final class DemoStore implements KeyHandoverStateStore {
-    private final Map<KeyHandoverRequestId, KeyHandoverState> states = new HashMap<>();
-    private final Map<BusinessKey, KeyHandoverRequestId> index = new HashMap<>();
-    private final List<AuditRecord> pending = new ArrayList<>();
-
-    public Optional<KeyHandoverState> findByBusinessKey(BusinessKey key) {
-      return Optional.ofNullable(index.get(key)).flatMap(this::findById);
-    }
-
-    public Optional<KeyHandoverState> findById(KeyHandoverRequestId id) {
-      return Optional.ofNullable(states.get(id));
-    }
-
-    public KeyHandoverState insertIfAbsent(KeyHandoverState state, List<AuditRecord> records) {
-      if (index.containsKey(state.businessKey())) return states.get(index.get(state.businessKey()));
-      states.put(state.requestId(), state);
-      index.put(state.businessKey(), state.requestId());
-      pending.addAll(records);
-      return state;
-    }
-
-    public KeyHandoverState commit(
-        KeyHandoverState state, DomainVersion expected, List<AuditRecord> records) {
-      KeyHandoverState current = states.get(state.requestId());
-      if (current == null || !current.stateVersion().equals(expected))
-        throw new IllegalArgumentException("State version conflict");
-      states.put(state.requestId(), state);
-      pending.addAll(records);
-      return state;
-    }
-
-    public void appendPendingAudit(AuditRecord audit) {
-      pending.add(audit);
-    }
-
-    public List<AuditRecord> pendingAudits() {
-      return List.copyOf(pending);
-    }
-
-    public void markAuditDelivered(AuditRecord audit) {
-      pending.remove(audit);
-    }
-  }
 
   private static final class DemoInspectionConnector implements InspectionConnector {
     private final Set<String> waiting = new HashSet<>();
@@ -594,15 +602,90 @@ public final class KeyHandoverDemoService {
     }
   }
 
-  private static final class DemoAuditSink implements AuditSink {
-    private final List<AuditRecord> records = new ArrayList<>();
+  private static final class PersistentDemoAuditSink implements AuditSink {
+    private final Path journal;
+    private final List<AuditView> records = new ArrayList<>();
 
-    public void emit(AuditRecord record) {
-      records.add(record);
+    PersistentDemoAuditSink(Path journal) {
+      this.journal = journal;
+      load();
     }
 
-    List<AuditRecord> records() {
+    public synchronized void emit(AuditRecord record) {
+      AuditView view =
+          new AuditView(
+              record.requestId().value(),
+              record.eventType(),
+              record.stateVersion().value(),
+              record.actorId().value(),
+              record.occurredAt().toString(),
+              record.correlationId().value(),
+              record.causationId().value());
+      records.add(view);
+      append(view);
+    }
+
+    synchronized List<AuditView> records() {
       return List.copyOf(records);
+    }
+
+    private void load() {
+      try {
+        if (!Files.exists(journal)) return;
+        for (String line : Files.readAllLines(journal)) {
+          String[] values = line.split("\\t", -1);
+          if (values.length == 7) records.add(AuditView.from(values));
+        }
+      } catch (java.io.IOException exception) {
+        throw new IllegalStateException("Unable to load local audit journal", exception);
+      }
+    }
+
+    private void append(AuditView view) {
+      try {
+        Path parent = journal.getParent();
+        if (parent != null) Files.createDirectories(parent);
+        Files.writeString(
+            journal,
+            view.serialized() + System.lineSeparator(),
+            java.nio.charset.StandardCharsets.UTF_8,
+            java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.APPEND);
+      } catch (java.io.IOException exception) {
+        throw new IllegalStateException("Unable to persist local audit journal", exception);
+      }
+    }
+  }
+
+  private record AuditView(
+      String requestId,
+      String eventType,
+      int stateVersion,
+      String actorId,
+      String occurredAt,
+      String correlationId,
+      String causationId) {
+    static AuditView from(String[] values) {
+      return new AuditView(
+          values[0],
+          values[1],
+          Integer.parseInt(values[2]),
+          values[3],
+          values[4],
+          values[5],
+          values[6]);
+    }
+
+    String serialized() {
+      return String.join(
+          "\t",
+          requestId,
+          eventType,
+          String.valueOf(stateVersion),
+          actorId,
+          occurredAt,
+          correlationId,
+          causationId);
     }
   }
 

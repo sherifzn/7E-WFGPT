@@ -1,9 +1,23 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ClearanceTask, keyHandoverApi, KeyHandoverRequest, Outcome } from "./keyHandoverDemo";
+import {
+  ClearanceTask,
+  DevelopmentIdentity,
+  keyHandoverApi,
+  KeyHandoverRequest,
+  Outcome
+} from "./keyHandoverDemo";
 import "./styles.css";
 
 type View = "requests" | "new-request";
 const statusClass = (status: string) => status.toLowerCase().replaceAll(" ", "-");
+const identities: { value: DevelopmentIdentity; label: string }[] = [
+  { value: "requester", label: "Requester" },
+  { value: "handoverOfficer", label: "Handover officer" },
+  { value: "financeOfficer", label: "Finance officer" },
+  { value: "legalOfficer", label: "Legal officer" },
+  { value: "teamHead", label: "Team Head" },
+  { value: "processOwner", label: "Process owner" }
+];
 
 export function App() {
   const [view, setView] = useState<View>("requests");
@@ -14,6 +28,7 @@ export function App() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [identity, setIdentity] = useState<DevelopmentIdentity>("requester");
 
   const selected = useMemo(
     () => requests.find((request) => request.requestNumber === selectedNumber) ?? requests[0],
@@ -47,7 +62,12 @@ export function App() {
     if (!selected) return;
     setBusy(true);
     try {
-      replace(await keyHandoverApi.action(selected.requestNumber, path, parameters));
+      replace(
+        await keyHandoverApi.action(selected.requestNumber, path, {
+          ...parameters,
+          actor: identity
+        })
+      );
       setMessage("");
     } catch (error) {
       setMessage(
@@ -65,7 +85,7 @@ export function App() {
     }
     setBusy(true);
     try {
-      const created = await keyHandoverApi.create(propertyReference, ownerReference);
+      const created = await keyHandoverApi.create(propertyReference, ownerReference, identity);
       setRequests((current) => [created, ...current]);
       setSelectedNumber(created.requestNumber);
       setPropertyReference("");
@@ -111,7 +131,19 @@ export function App() {
             <p className="eyebrow">Property services</p>
             <h1>Key Handover</h1>
           </div>
-          <span className="local-pill">Local API demo</span>
+          <label className="identity-selector">
+            <span>Testing as</span>
+            <select
+              value={identity}
+              onChange={(event) => setIdentity(event.target.value as DevelopmentIdentity)}
+            >
+              {identities.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </header>
         {message && (
           <p className="form-message" role="alert">
