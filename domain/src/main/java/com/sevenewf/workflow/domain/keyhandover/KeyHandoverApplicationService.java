@@ -103,6 +103,7 @@ public final class KeyHandoverApplicationService {
             Optional.empty(),
             Optional.empty(),
             Optional.empty(),
+            Optional.empty(),
             now);
     List<AuditRecord> audits =
         List.of(
@@ -580,11 +581,183 @@ public final class KeyHandoverApplicationService {
     return deliverNotification(saved, actor, correlationId, causationId);
   }
 
+  public KeyHandoverState decideException(ExceptionDecisionCommand command) {
+    KeyHandoverState state = requireState(command.requestId());
+    if (state.exceptionDecision().isPresent()) {
+      ExceptionDecision existing = state.exceptionDecision().orElseThrow();
+      if (existing.decision() == command.decision()
+          && existing.actorId().equals(command.actor().actorId())
+          && existing.reason().equals(command.reason())) {
+        appendAudit(
+            audit(
+                "DuplicateExceptionDecisionAccepted",
+                state,
+                command.actor().actorId(),
+                command.correlationId(),
+                command.causationId(),
+                List.of(),
+                exceptionMetadata(state, state, command)));
+        return state;
+      }
+      appendAudit(
+          audit(
+              "ConflictingDuplicateExceptionDecisionRejected",
+              state,
+              command.actor().actorId(),
+              command.correlationId(),
+              command.causationId(),
+              List.of(),
+              exceptionMetadata(state, state, command)));
+      throw new ConflictingExceptionDecisionException("Conflicting duplicate exception decision");
+    }
+    requireVersion(state, command.expectedStateVersion());
+    requireExceptionApprover(state, command);
+    if (state.status() != RequestStatus.EXCEPTION_APPROVAL_REQUIRED)
+      throw new ValidationFailedException("Exception approval is not available for this request state");
+
+    ExceptionDecision decision =
+        new ExceptionDecision(
+            command.actor().actorId(),
+            actorRole(command.actor()),
+            command.decision(),
+            command.reason(),
+            clock.now(),
+            command.correlationId(),
+            command.causationId());
+    if (command.decision() == ExceptionDecisionType.REJECT_EXCEPTION) {
+      KeyHandoverState rejected =
+          next(
+              state,
+              RequestStatus.EXCEPTION_REJECTED,
+              Optional.of(decision),
+              Optional.empty(),
+              Optional.empty());
+      return commit(
+          rejected,
+          state.stateVersion(),
+          List.of(
+              audit(
+                  "ExceptionApprovalRequested",
+                  rejected,
+                  command.actor().actorId(),
+                  command.correlationId(),
+                  command.causationId(),
+                  List.of(),
+                  exceptionMetadata(state, rejected, command)),
+              audit(
+                  "ExceptionRejected",
+                  rejected,
+                  command.actor().actorId(),
+                  command.correlationId(),
+                  command.causationId(),
+                  List.of(),
+                  exceptionMetadata(state, rejected, command))));
+    }
+
+    KeyReleaseAuthorization authorization =
+        new KeyReleaseAuthorization(
+            new AuthorizationId("release-" + state.requestId().value()),
+            state.requestId(),
+            state.finalDecision().orElseThrow().evidenceReferences(),
+            clock.now());
+    NotificationState notification =
+        new NotificationState(
+            new IdempotencyKey("notify-" + authorization.authorizationId().value()),
+            NotificationDeliveryStatus.PENDING,
+            0,
+            Optional.empty());
+    KeyHandoverState approved =
+        next(
+            state,
+            RequestStatus.AUTHORIZED,
+            Optional.of(decision),
+            Optional.of(authorization),
+            Optional.of(notification));
+    KeyHandoverState saved =
+        commit(
+            approved,
+            state.stateVersion(),
+            List.of(
+                audit(
+                    "ExceptionApprovalRequested",
+                    approved,
+                    command.actor().actorId(),
+                    command.correlationId(),
+                    command.causationId(),
+                    List.of(),
+                    exceptionMetadata(state, approved, command)),
+                audit(
+                    "ExceptionApproved",
+                    approved,
+                    command.actor().actorId(),
+                    command.correlationId(),
+                    command.causationId(),
+                    authorization.evidenceReferences(),
+                    exceptionMetadata(state, approved, command)),
+                audit(
+                    "AuthorizationCreated",
+                    approved,
+                    command.actor().actorId(),
+                    command.correlationId(),
+                    command.causationId(),
+                    authorization.evidenceReferences(),
+                    exceptionMetadata(state, approved, command)),
+                audit(
+                    "NotificationTriggered",
+                    approved,
+                    command.actor().actorId(),
+                    command.correlationId(),
+                    command.causationId(),
+                    authorization.evidenceReferences(),
+                    exceptionMetadata(state, approved, command))));
+    return deliverNotification(saved, command.actor(), command.correlationId(), command.causationId());
+  }
+
   public void deliverPendingAudits() {
     for (AuditRecord audit : stateStore.pendingAudits()) {
       auditSink.emit(audit);
       stateStore.markAuditDelivered(audit);
     }
+  }
+
+  private void requireExceptionApprover(
+      KeyHandoverState state, ExceptionDecisionCommand command) {
+    try {
+      authorizationService.require(command.actor(), Permission.DECIDE_EXCEPTION);
+    } catch (RuntimeException exception) {
+      appendAudit(
+          audit(
+              "UnauthorizedExceptionDecisionAttempt",
+              state,
+              command.actor().actorId(),
+              command.correlationId(),
+              command.causationId(),
+              List.of(),
+              exceptionMetadata(state, state, command)));
+      throw exception;
+    }
+  }
+
+  private void appendAudit(AuditRecord audit) {
+    stateStore.appendPendingAudit(audit);
+    deliverPendingAudits();
+  }
+
+  private static TeamOrRoleRef actorRole(Actor actor) {
+    return actor.eligibleTeamsOrRoles().stream()
+        .sorted(java.util.Comparator.comparing(TeamOrRoleRef::value))
+        .findFirst()
+        .orElseThrow(() -> new AuthorizationDeniedException("Actor role is required"));
+  }
+
+  private static Map<String, String> exceptionMetadata(
+      KeyHandoverState previous, KeyHandoverState next, ExceptionDecisionCommand command) {
+    return Map.of(
+        "actorRole", actorRole(command.actor()).value(),
+        "decision", command.decision().name(),
+        "previousState", previous.status().name(),
+        "newState", next.status().name(),
+        "reason", command.reason());
   }
 
   public KeyHandoverState viewTask(
@@ -846,7 +1019,33 @@ public final class KeyHandoverApplicationService {
       Optional<KeyReleaseAuthorization> authorization,
       Optional<NotificationState> notification) {
     return state.next(
-        status, inspection, child, branches, decision, authorization, notification, clock.now());
+        status,
+        inspection,
+        child,
+        branches,
+        decision,
+        state.exceptionDecision(),
+        authorization,
+        notification,
+        clock.now());
+  }
+
+  private KeyHandoverState next(
+      KeyHandoverState state,
+      RequestStatus status,
+      Optional<ExceptionDecision> exceptionDecision,
+      Optional<KeyReleaseAuthorization> authorization,
+      Optional<NotificationState> notification) {
+    return state.next(
+        status,
+        state.inspectionStatus(),
+        state.inspectionChildWorkflowId(),
+        state.branches(),
+        state.finalDecision(),
+        exceptionDecision,
+        authorization,
+        notification,
+        clock.now());
   }
 
   private AuditRecord audit(

@@ -346,12 +346,15 @@ h3 {
   gap: 5px;
 }
 .outcome {
+  display: inline-flex;
   padding: 3px 5px;
   border: 1px solid currentColor;
   border-radius: 5px;
   color: #8fa0b2;
   font-size: 0.66rem;
   font-weight: 800;
+  line-height: 1.25;
+  white-space: nowrap;
 }
 .outcome.green {
   color: #2b8c6c;
@@ -362,9 +365,53 @@ h3 {
 .outcome.red {
   color: #bb4a4a;
 }
-.selected-outcome {
-  background: currentColor;
+.outcome.selected-outcome.green {
+  background: #2b8c6c;
+  border-color: #2b8c6c;
   color: #fff;
+}
+.outcome.selected-outcome.amber {
+  background: #8b5700;
+  border-color: #8b5700;
+  color: #fff;
+}
+.outcome.selected-outcome.red {
+  background: #a13232;
+  border-color: #a13232;
+  color: #fff;
+}
+.completed-outcome {
+  opacity: 1;
+}
+.completed-outcome:not(.selected-outcome) {
+  background: #f3f6f9;
+}
+.outcome:focus-visible,
+.complete-actions button:focus-visible {
+  outline: 3px solid #102744;
+  outline-offset: 2px;
+}
+.exception-decision-panel {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid #dce6f0;
+  border-radius: 13px;
+  background: #fff;
+}
+.exception-decision-panel label {
+  display: grid;
+  gap: 6px;
+  color: #314967;
+  font-weight: 700;
+}
+.exception-decision-panel textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+.exception-actions {
+  display: flex;
+  gap: 8px;
 }
 .task-actions {
   display: grid;

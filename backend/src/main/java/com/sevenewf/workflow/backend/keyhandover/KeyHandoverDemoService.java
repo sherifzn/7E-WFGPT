@@ -5,6 +5,11 @@ import com.sevenewf.workflow.domain.common.ActorId;
 import com.sevenewf.workflow.domain.common.CausationId;
 import com.sevenewf.workflow.domain.common.CorrelationId;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverApplicationService;
+import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.AuthorizationDeniedException;
+import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.ConflictingDuplicateCompletionException;
+import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.ConflictingExceptionDecisionException;
+import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.OptimisticStateConflictException;
+import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.ValidationFailedException;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverPorts.*;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverState;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.*;
@@ -69,8 +74,15 @@ public final class KeyHandoverDemoService {
         return ok(auditJson(state));
       if (!"POST".equals(method)) return notFound();
       return ok(requestJson(action(state, Arrays.copyOfRange(parts, 1, parts.length), parameters)));
-    } catch (SecurityException exception) {
+    } catch (SecurityException | AuthorizationDeniedException exception) {
       return new ApiResponse(403, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
+    } catch (OptimisticStateConflictException
+        | ConflictingDuplicateCompletionException
+        | ConflictingExceptionDecisionException exception) {
+      return new ApiResponse(409, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
+    } catch (ValidationFailedException exception) {
+      if ("Unknown key handover request".equals(exception.getMessage())) return notFound();
+      return new ApiResponse(400, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
     } catch (RuntimeException exception) {
       return new ApiResponse(400, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
     }
@@ -112,6 +124,19 @@ public final class KeyHandoverDemoService {
           state.stateVersion(),
           correlation(number),
           causation(number, "retry"));
+    if (matches(action, "exception", "approve") || matches(action, "exception", "reject"))
+      return service.decideException(
+          new ExceptionDecisionCommand(
+              state.requestId(),
+              actor(parameters),
+              matches(action, "exception", "approve")
+                  ? ExceptionDecisionType.APPROVE_EXCEPTION
+                  : ExceptionDecisionType.REJECT_EXCEPTION,
+              required(parameters, "reason"),
+              new com.sevenewf.workflow.domain.common.DomainVersion(
+                  integer(parameters, "expectedStateVersion")),
+              correlation(parameters, number),
+              causation(parameters, number, "exception")));
     if (matches(action, "tasks", "finance", "complete"))
       return service.completeFinanceBranch(
           state.requestId(),
@@ -258,7 +283,7 @@ public final class KeyHandoverDemoService {
   private KeyHandoverState state(String number) {
     return store
         .findByBusinessKey(new BusinessKey(number))
-        .orElseThrow(() -> new IllegalArgumentException("Unknown request"));
+        .orElseThrow(() -> new ValidationFailedException("Unknown key handover request"));
   }
 
   private String listJson() {
@@ -292,6 +317,16 @@ public final class KeyHandoverDemoService {
         + field(
             "notification",
             state.notificationState().map(value -> label(value.status())).orElse("Not started"))
+        + ","
+        + field(
+            "exceptionDecision",
+            state.exceptionDecision().map(value -> label(value.decision())).orElse(""))
+        + ","
+        + field("exceptionReason", state.exceptionDecision().map(ExceptionDecision::reason).orElse(""))
+        + ","
+        + field(
+            "authorizationId",
+            state.authorization().map(value -> value.authorizationId().value()).orElse(""))
         + ","
         + field("lastUpdated", state.updatedAt().toString())
         + ",\"tasks\":"
@@ -343,6 +378,14 @@ public final class KeyHandoverDemoService {
                         + field("correlationId", record.correlationId())
                         + ","
                         + field("causationId", record.causationId())
+                        + ","
+                        + field("actorRole", record.metadata("actorRole"))
+                        + ","
+                        + field("previousState", record.metadata("previousState"))
+                        + ","
+                        + field("newState", record.metadata("newState"))
+                        + ","
+                        + field("reason", record.metadata("reason"))
                         + "}")
             .collect(java.util.stream.Collectors.joining(","))
         + "]";
@@ -394,6 +437,7 @@ public final class KeyHandoverDemoService {
     if ("WAITING_FOR_INSPECTION".equals(value)) return "Waiting for inspection";
     if ("CLEARANCE_IN_PROGRESS".equals(value)) return "Clearance in progress";
     if ("EXCEPTION_APPROVAL_REQUIRED".equals(value)) return "Exception approval required";
+    if ("EXCEPTION_REJECTED".equals(value)) return "Exception rejected";
     if ("NOTIFICATION_FAILED".equals(value)) return "Notification failed";
     if ("HOLD".equals(value)) return "On hold";
     if ("NOT_STARTED".equals(value)) return "Not started";
@@ -495,9 +539,10 @@ public final class KeyHandoverDemoService {
             Permission.REASSIGN_TASK,
             Permission.EMERGENCY_REASSIGN,
             Permission.RETRY_NOTIFICATION,
+            Permission.DECIDE_EXCEPTION,
             Permission.VIEW_TASK),
         Set.of(),
-        "operations-role");
+        "process-owner-role");
   }
 
   private static Actor retryActor() {
@@ -517,8 +562,28 @@ public final class KeyHandoverDemoService {
     return new CorrelationId("corr-" + number);
   }
 
+  private static CorrelationId correlation(Map<String, String> parameters, String number) {
+    String value = parameters.get("correlationId");
+    return new CorrelationId(value == null || value.isBlank() ? "corr-" + number : value);
+  }
+
   private static CausationId causation(String number, String action) {
     return new CausationId("cause-" + number + "-" + action);
+  }
+
+  private static CausationId causation(
+      Map<String, String> parameters, String number, String action) {
+    String value = parameters.get("causationId");
+    return new CausationId(
+        value == null || value.isBlank() ? "cause-" + number + "-" + action : value);
+  }
+
+  private static int integer(Map<String, String> values, String name) {
+    try {
+      return Integer.parseInt(required(values, name));
+    } catch (NumberFormatException exception) {
+      throw new IllegalArgumentException(name + " must be a number");
+    }
   }
 
   private int nextSequence() {
@@ -620,7 +685,8 @@ public final class KeyHandoverDemoService {
               record.actorId().value(),
               record.occurredAt().toString(),
               record.correlationId().value(),
-              record.causationId().value());
+              record.causationId().value(),
+              metadata(record.metadata()));
       records.add(view);
       append(view);
     }
@@ -634,7 +700,7 @@ public final class KeyHandoverDemoService {
         if (!Files.exists(journal)) return;
         for (String line : Files.readAllLines(journal)) {
           String[] values = line.split("\\t", -1);
-          if (values.length == 7) records.add(AuditView.from(values));
+          if (values.length == 7 || values.length == 8) records.add(AuditView.from(values));
         }
       } catch (java.io.IOException exception) {
         throw new IllegalStateException("Unable to load local audit journal", exception);
@@ -664,7 +730,8 @@ public final class KeyHandoverDemoService {
       String actorId,
       String occurredAt,
       String correlationId,
-      String causationId) {
+      String causationId,
+      String metadata) {
     static AuditView from(String[] values) {
       return new AuditView(
           values[0],
@@ -673,7 +740,16 @@ public final class KeyHandoverDemoService {
           values[3],
           values[4],
           values[5],
-          values[6]);
+          values[6],
+          values.length == 8 ? values[7] : "");
+    }
+
+    String metadata(String name) {
+      for (String entry : metadata.split(";")) {
+        String[] values = entry.split("=", 2);
+        if (values.length == 2 && values[0].equals(name)) return values[1];
+      }
+      return "";
     }
 
     String serialized() {
@@ -685,8 +761,16 @@ public final class KeyHandoverDemoService {
           actorId,
           occurredAt,
           correlationId,
-          causationId);
+        causationId,
+        metadata);
     }
+  }
+
+  private static String metadata(Map<String, String> values) {
+    return values.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .map(entry -> entry.getKey() + "=" + entry.getValue().replace(";", ",").replace("=", ":"))
+        .collect(java.util.stream.Collectors.joining(";"));
   }
 
   private static final class DemoDecisionService implements DecisionService {

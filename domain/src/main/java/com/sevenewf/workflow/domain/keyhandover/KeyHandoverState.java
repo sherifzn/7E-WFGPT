@@ -18,6 +18,7 @@ public record KeyHandoverState(
     Optional<ChildWorkflowId> inspectionChildWorkflowId,
     Map<ClearanceBranch, BranchState> branches,
     Optional<FinalDecision> finalDecision,
+    Optional<ExceptionDecision> exceptionDecision,
     Optional<KeyReleaseAuthorization> authorization,
     Optional<NotificationState> notificationState,
     Instant updatedAt) {
@@ -33,6 +34,7 @@ public record KeyHandoverState(
         inspectionChildWorkflowId == null ? Optional.empty() : inspectionChildWorkflowId;
     branches = Map.copyOf(Validation.requirePresent(branches, "branches"));
     finalDecision = finalDecision == null ? Optional.empty() : finalDecision;
+    exceptionDecision = exceptionDecision == null ? Optional.empty() : exceptionDecision;
     authorization = authorization == null ? Optional.empty() : authorization;
     notificationState = notificationState == null ? Optional.empty() : notificationState;
     Validation.requirePresent(updatedAt, "updatedAt");
@@ -44,6 +46,7 @@ public record KeyHandoverState(
       Optional<ChildWorkflowId> newInspectionChildWorkflowId,
       Map<ClearanceBranch, BranchState> newBranches,
       Optional<FinalDecision> newFinalDecision,
+      Optional<ExceptionDecision> newExceptionDecision,
       Optional<KeyReleaseAuthorization> newAuthorization,
       Optional<NotificationState> newNotificationState,
       Instant now) {
@@ -58,6 +61,7 @@ public record KeyHandoverState(
         newInspectionChildWorkflowId,
         newBranches,
         newFinalDecision,
+        newExceptionDecision,
         newAuthorization,
         newNotificationState,
         now);

@@ -27,6 +27,12 @@ public final class KeyHandoverExceptions {
     }
   }
 
+  public static final class ConflictingExceptionDecisionException extends RuntimeException {
+    public ConflictingExceptionDecisionException(String message) {
+      super(message);
+    }
+  }
+
   public static final class TransientConnectorException extends RuntimeException {
     public TransientConnectorException(String message) {
       super(message);

@@ -10,6 +10,7 @@ import "./styles.css";
 
 type View = "requests" | "new-request";
 const statusClass = (status: string) => status.toLowerCase().replaceAll(" ", "-");
+const finalState = (request: KeyHandoverRequest) => request.status;
 const identities: { value: DevelopmentIdentity; label: string }[] = [
   { value: "requester", label: "Requester" },
   { value: "handoverOfficer", label: "Handover officer" },
@@ -176,7 +177,13 @@ export function App() {
               selected={selected.requestNumber}
               onSelect={setSelectedNumber}
             />
-            <RequestDetail request={selected} busy={busy} onAction={perform} />
+            <RequestDetail
+              request={selected}
+              busy={busy}
+              identity={identity}
+              onAction={perform}
+              onUpdate={replace}
+            />
           </div>
         )}
       </main>
@@ -258,7 +265,7 @@ function RequestList({
             <span>{request.property}</span>
             <span>{request.owner}</span>
             <span className={`status ${statusClass(request.status)}`}>{request.status}</span>
-            <span>{request.finalDecision || "—"}</span>
+            <span>{finalState(request)}</span>
             <time>{request.lastUpdated}</time>
           </button>
         ))}
@@ -269,13 +276,18 @@ function RequestList({
 function RequestDetail({
   request,
   busy,
-  onAction
+  identity,
+  onAction,
+  onUpdate
 }: {
   request: KeyHandoverRequest;
   busy: boolean;
+  identity: DevelopmentIdentity;
   onAction: (path: string, parameters?: Record<string, string>) => Promise<void>;
+  onUpdate: (updated: KeyHandoverRequest) => void;
 }) {
   const blocked = request.inspection === "Waiting";
+  const displayedFinalState = finalState(request);
   return (
     <section className="detail-panel" aria-labelledby="detail-title">
       <div className="detail-heading">
@@ -307,7 +319,7 @@ function RequestDetail({
         </article>
         <article>
           <span>Final decision</span>
-          <strong>{request.finalDecision || "Pending clearance"}</strong>
+          <strong>{displayedFinalState}</strong>
         </article>
       </div>
       <section className="workbench" aria-labelledby="workbench-title">
@@ -327,13 +339,15 @@ function RequestDetail({
       <section className="final-result" aria-labelledby="result-title">
         <div>
           <p className="eyebrow">Final result</p>
-          <h2 id="result-title">{request.finalDecision || "Awaiting all checks"}</h2>
+          <h2 id="result-title">{displayedFinalState}</h2>
           <p>
-            {request.notification === "Delivered"
-              ? "Authorization notification delivered"
-              : request.notification === "Failed"
-                ? "Notification needs retry"
-                : "Notification starts after authorization"}
+            {request.status === "Exception rejected"
+              ? `Exception rejected: ${request.exceptionReason}`
+              : request.notification === "Delivered"
+                ? "Authorization notification delivered"
+                : request.notification === "Failed"
+                  ? "Notification needs retry"
+                  : "Notification starts after authorization"}
           </p>
         </div>
         <div className="result-actions">
@@ -348,7 +362,96 @@ function RequestDetail({
           )}
         </div>
       </section>
+      <ExceptionDecisionPanel
+        request={request}
+        identity={identity}
+        busy={busy}
+        onUpdate={onUpdate}
+      />
       <AuditTimeline request={request} />
+    </section>
+  );
+}
+function ExceptionDecisionPanel({
+  request,
+  identity,
+  busy,
+  onUpdate
+}: {
+  request: KeyHandoverRequest;
+  identity: DevelopmentIdentity;
+  busy: boolean;
+  onUpdate: (updated: KeyHandoverRequest) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const awaitingDecision = request.status === "Exception approval required";
+  const authorized = identity === "processOwner";
+  const decide = async (decision: "approve" | "reject") => {
+    if (!reason.trim()) {
+      setMessage("A reason is required for an exception decision.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await keyHandoverApi.decideException(request.requestNumber, decision, {
+        actor: identity,
+        reason: reason.trim(),
+        expectedStateVersion: String(request.stateVersion),
+        correlationId: `corr-${request.requestNumber}-exception`,
+        causationId: `cause-${request.requestNumber}-exception-${decision}`
+      });
+      onUpdate(updated);
+      setMessage(
+        decision === "approve"
+          ? "Exception approved and notification started."
+          : "Exception rejected."
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "The exception decision could not be completed."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+  if (!awaitingDecision) return null;
+  return (
+    <section className="exception-decision-panel" aria-labelledby="exception-decision-title">
+      <p className="eyebrow">Exception decision</p>
+      <h2 id="exception-decision-title">Exception approval required</h2>
+      {authorized ? (
+        <>
+          <label>
+            Decision reason
+            <textarea value={reason} onChange={(event) => setReason(event.target.value)} />
+          </label>
+          {message && (
+            <p className="form-message" role="alert">
+              {message}
+            </p>
+          )}
+          <div className="exception-actions">
+            <button
+              className="primary"
+              disabled={busy || saving}
+              onClick={() => void decide("approve")}
+            >
+              {saving ? "Saving…" : "Approve exception"}
+            </button>
+            <button
+              className="secondary"
+              disabled={busy || saving}
+              onClick={() => void decide("reject")}
+            >
+              Reject exception
+            </button>
+          </div>
+        </>
+      ) : (
+        <p>You can view this exception, but only an authorized Process Owner can decide it.</p>
+      )}
     </section>
   );
 }
@@ -388,18 +491,19 @@ function TaskCard({
         Assigned to: <strong>{task.assignedTo || "Unassigned"}</strong>
       </p>
       <div className="outcomes" aria-label={`${task.title} outcome`}>
-        {(["GREEN", "AMBER", "RED"] as Outcome[]).map((outcome) => (
-          <span
-            key={outcome}
-            className={
-              task.outcome === outcome
-                ? `outcome ${outcome.toLowerCase()} selected-outcome`
-                : `outcome ${outcome.toLowerCase()}`
-            }
-          >
-            {outcome}
-          </span>
-        ))}
+        {(["GREEN", "AMBER", "RED"] as Outcome[]).map((outcome) => {
+          const selected = task.outcome === outcome;
+          return (
+            <span
+              key={outcome}
+              aria-disabled={completed || undefined}
+              aria-label={`${outcome}${selected ? ", selected" : ""}${completed ? ", completed" : ""}`}
+              className={`outcome ${outcome.toLowerCase()} ${selected ? "selected-outcome" : ""} ${completed ? "completed-outcome" : ""}`}
+            >
+              {outcome}
+            </span>
+          );
+        })}
       </div>
       <div className="task-actions">
         {!completed && (

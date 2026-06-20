@@ -180,7 +180,7 @@ public final class SyntheticKeyHandoverAdapters {
   }
 
   private static final class StateFileCodec {
-    private static final int FORMAT_VERSION = 1;
+    private static final int FORMAT_VERSION = 2;
 
     private StateFileCodec() {}
 
@@ -208,11 +208,12 @@ public final class SyntheticKeyHandoverAdapters {
         Map<BusinessKey, KeyHandoverRequestId> byBusinessKey,
         List<AuditRecord> pending)
         throws IOException {
-      if (data.readInt() != FORMAT_VERSION)
+      int formatVersion = data.readInt();
+      if (formatVersion != 1 && formatVersion != FORMAT_VERSION)
         throw new IOException("Unsupported test snapshot format");
       int stateCount = data.readInt();
       for (int index = 0; index < stateCount; index++) {
-        KeyHandoverState state = readState(data);
+        KeyHandoverState state = readState(data, formatVersion);
         byId.put(state.requestId(), state);
       }
       int indexCount = data.readInt();
@@ -239,6 +240,9 @@ public final class SyntheticKeyHandoverAdapters {
       data.writeBoolean(state.finalDecision().isPresent());
       if (state.finalDecision().isPresent())
         writeDecision(data, state.finalDecision().orElseThrow());
+      data.writeBoolean(state.exceptionDecision().isPresent());
+      if (state.exceptionDecision().isPresent())
+        writeExceptionDecision(data, state.exceptionDecision().orElseThrow());
       data.writeBoolean(state.authorization().isPresent());
       if (state.authorization().isPresent())
         writeAuthorization(data, state.authorization().orElseThrow());
@@ -248,7 +252,7 @@ public final class SyntheticKeyHandoverAdapters {
       writeInstant(data, state.updatedAt());
     }
 
-    private static KeyHandoverState readState(DataInputStream data) throws IOException {
+    private static KeyHandoverState readState(DataInputStream data, int formatVersion) throws IOException {
       KeyHandoverRequestId requestId = new KeyHandoverRequestId(data.readUTF());
       DomainVersion version = new DomainVersion(data.readInt());
       BusinessKey businessKey = new BusinessKey(data.readUTF());
@@ -266,6 +270,10 @@ public final class SyntheticKeyHandoverAdapters {
       }
       Optional<FinalDecision> decision =
           data.readBoolean() ? Optional.of(readDecision(data)) : Optional.empty();
+      Optional<ExceptionDecision> exceptionDecision =
+          formatVersion >= 2 && data.readBoolean()
+              ? Optional.of(readExceptionDecision(data))
+              : Optional.empty();
       Optional<KeyReleaseAuthorization> authorization =
           data.readBoolean() ? Optional.of(readAuthorization(data)) : Optional.empty();
       Optional<NotificationState> notification =
@@ -281,6 +289,7 @@ public final class SyntheticKeyHandoverAdapters {
           child,
           branches,
           decision,
+          exceptionDecision,
           authorization,
           notification,
           readInstant(data));
@@ -372,6 +381,28 @@ public final class SyntheticKeyHandoverAdapters {
           outcomes,
           new PolicyRef(data.readUTF()),
           readEvidence(data),
+          new CorrelationId(data.readUTF()),
+          new CausationId(data.readUTF()));
+    }
+
+    private static void writeExceptionDecision(DataOutputStream data, ExceptionDecision decision)
+        throws IOException {
+      data.writeUTF(decision.actorId().value());
+      data.writeUTF(decision.actorRole().value());
+      data.writeUTF(decision.decision().name());
+      data.writeUTF(decision.reason());
+      writeInstant(data, decision.decidedAt());
+      data.writeUTF(decision.correlationId().value());
+      data.writeUTF(decision.causationId().value());
+    }
+
+    private static ExceptionDecision readExceptionDecision(DataInputStream data) throws IOException {
+      return new ExceptionDecision(
+          new com.sevenewf.workflow.domain.common.ActorId(data.readUTF()),
+          new TeamOrRoleRef(data.readUTF()),
+          ExceptionDecisionType.valueOf(data.readUTF()),
+          data.readUTF(),
+          readInstant(data),
           new CorrelationId(data.readUTF()),
           new CausationId(data.readUTF()));
     }

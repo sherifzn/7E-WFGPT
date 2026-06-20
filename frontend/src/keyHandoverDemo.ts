@@ -3,6 +3,7 @@ export type RequestStatus =
   | "Clearance in progress"
   | "Authorized"
   | "Exception approval required"
+  | "Exception rejected"
   | "On hold"
   | "Notification failed";
 export type Outcome = "GREEN" | "AMBER" | "RED";
@@ -40,6 +41,9 @@ export interface KeyHandoverRequest {
   inspection: "Available" | "Waiting";
   finalDecision: RequestStatus | "";
   notification: NotificationStatus;
+  exceptionDecision: "Approve Exception" | "Reject Exception" | "";
+  exceptionReason: string;
+  authorizationId: string;
   lastUpdated: string;
   tasks: ClearanceTask[];
   audit: AuditEvent[];
@@ -67,6 +71,15 @@ export const keyHandoverApi = {
     }),
   action: (requestNumber: string, path: string, parameters: Record<string, string> = {}) =>
     request<KeyHandoverRequest>(`/${encodeURIComponent(requestNumber)}/${path}`, {
+      method: "POST",
+      body: new URLSearchParams(parameters).toString()
+    }),
+  decideException: (
+    requestNumber: string,
+    decision: "approve" | "reject",
+    parameters: Record<string, string>
+  ) =>
+    request<KeyHandoverRequest>(`/${encodeURIComponent(requestNumber)}/exception/${decision}`, {
       method: "POST",
       body: new URLSearchParams(parameters).toString()
     }),

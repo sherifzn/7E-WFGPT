@@ -106,6 +106,7 @@ public final class KeyHandoverTypes {
     AUTHORIZED,
     HOLD,
     EXCEPTION_APPROVAL_REQUIRED,
+    EXCEPTION_REJECTED,
     NOTIFICATION_FAILED
   }
 
@@ -134,7 +135,8 @@ public final class KeyHandoverTypes {
     COMPLETE_TASK,
     REASSIGN_TASK,
     EMERGENCY_REASSIGN,
-    RETRY_NOTIFICATION
+    RETRY_NOTIFICATION,
+    DECIDE_EXCEPTION
   }
 
   public record Actor(
@@ -260,6 +262,49 @@ public final class KeyHandoverTypes {
       evidenceReferences = Validation.requireNonEmptyList(evidenceReferences, "evidenceReferences");
       Validation.requirePresent(completedBy, "completedBy");
       Validation.requirePresent(expectedStateVersion, "expectedStateVersion");
+      Validation.requirePresent(correlationId, "correlationId");
+      Validation.requirePresent(causationId, "causationId");
+    }
+  }
+
+  public enum ExceptionDecisionType {
+    APPROVE_EXCEPTION,
+    REJECT_EXCEPTION
+  }
+
+  public record ExceptionDecisionCommand(
+      KeyHandoverRequestId requestId,
+      Actor actor,
+      ExceptionDecisionType decision,
+      String reason,
+      DomainVersion expectedStateVersion,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    public ExceptionDecisionCommand {
+      Validation.requirePresent(requestId, "requestId");
+      Validation.requirePresent(actor, "actor");
+      Validation.requirePresent(decision, "decision");
+      reason = Validation.requireText(reason, "reason");
+      Validation.requirePresent(expectedStateVersion, "expectedStateVersion");
+      Validation.requirePresent(correlationId, "correlationId");
+      Validation.requirePresent(causationId, "causationId");
+    }
+  }
+
+  public record ExceptionDecision(
+      ActorId actorId,
+      TeamOrRoleRef actorRole,
+      ExceptionDecisionType decision,
+      String reason,
+      Instant decidedAt,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    public ExceptionDecision {
+      Validation.requirePresent(actorId, "actorId");
+      Validation.requirePresent(actorRole, "actorRole");
+      Validation.requirePresent(decision, "decision");
+      reason = Validation.requireText(reason, "reason");
+      Validation.requirePresent(decidedAt, "decidedAt");
       Validation.requirePresent(correlationId, "correlationId");
       Validation.requirePresent(causationId, "causationId");
     }
