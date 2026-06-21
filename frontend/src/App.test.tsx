@@ -12,6 +12,8 @@ const request = (overrides: Record<string, unknown> = {}) => ({
   inspection: "Waiting",
   finalDecision: "",
   notification: "Not Started",
+  notificationAttempts: 0,
+  notificationFailure: "",
   exceptionDecision: "",
   exceptionReason: "",
   authorizationId: "",
@@ -223,5 +225,51 @@ describe("Key Handover API demo", () => {
     await waitFor(() => expect(screen.getByText("Resolved: Resolved")).toBeVisible());
     expect(screen.getByRole("button", { name: "Resume workflow" })).toBeEnabled();
     expect(fetchMock.mock.calls[1]?.[0]).toContain("/KH-101/hold/remediation");
+  });
+
+  it("keeps Activity History expanded by default and toggles it accessibly without losing events", async () => {
+    const withAudit = request({
+      audit: [
+        {
+          id: "audit-1",
+          actor: "synthetic-owner",
+          eventType: "NotificationDelivered",
+          timestamp: "2026-06-20T10:00:00Z",
+          correlationId: "corr-1",
+          causationId: "cause-1"
+        }
+      ]
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [withAudit] }));
+    render(<App />);
+    expect(await screen.findByText("NotificationDelivered")).toBeVisible();
+    expect(screen.getByText("1 events")).toBeVisible();
+    const toggle = screen.getByRole("button", { name: "Collapse history" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(toggle, { key: "Enter" });
+    fireEvent.click(toggle);
+    expect(screen.queryByText("NotificationDelivered")).not.toBeInTheDocument();
+    expect(screen.getByText("1 events")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Expand history" }));
+    expect(await screen.findByText("NotificationDelivered")).toBeVisible();
+  });
+
+  it("shows the local notification simulation only to the Process Owner", async () => {
+    const authorized = request({
+      status: "Authorized",
+      notification: "Delivered",
+      notificationAttempts: 1,
+      authorizationId: "release-khr-KH-101"
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [authorized] }));
+    render(<App />);
+    await screen.findByText("Notification recovery");
+    expect(
+      screen.queryByRole("button", { name: "Fail next notification (local test)" })
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Testing as"), { target: { value: "processOwner" } });
+    expect(
+      screen.getByRole("button", { name: "Fail next notification (local test)" })
+    ).toBeVisible();
   });
 });

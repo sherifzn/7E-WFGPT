@@ -351,6 +351,15 @@ function RequestDetail({
           </p>
         </div>
         <div className="result-actions">
+          {identity === "processOwner" && (
+            <button
+              className="quiet"
+              disabled={busy}
+              onClick={() => void onAction("notification/fail-next")}
+            >
+              Fail next notification (local test)
+            </button>
+          )}
           {request.notification === "Failed" && (
             <button
               className="primary"
@@ -362,6 +371,7 @@ function RequestDetail({
           )}
         </div>
       </section>
+      <NotificationRecoveryPanel request={request} />
       <ExceptionDecisionPanel
         request={request}
         identity={identity}
@@ -370,6 +380,22 @@ function RequestDetail({
       />
       <HoldManagementPanel request={request} identity={identity} busy={busy} onAction={onAction} />
       <AuditTimeline request={request} />
+    </section>
+  );
+}
+function NotificationRecoveryPanel({ request }: { request: KeyHandoverRequest }) {
+  if (request.notification === "Not started") return null;
+  return (
+    <section className="notification-panel" aria-labelledby="notification-title">
+      <div>
+        <p className="eyebrow">Notification recovery</p>
+        <h2 id="notification-title">{request.notification}</h2>
+      </div>
+      <p>Attempts: {request.notificationAttempts}</p>
+      {request.notification === "Failed" && (
+        <p>Failure reason: {request.notificationFailure || "Synthetic delivery failure"}</p>
+      )}
+      <p>Last attempt: {request.lastUpdated}</p>
     </section>
   );
 }
@@ -741,6 +767,7 @@ function TaskCard({
   );
 }
 function AuditTimeline({ request }: { request: KeyHandoverRequest }) {
+  const [expanded, setExpanded] = useState(true);
   return (
     <section className="audit-panel" aria-labelledby="audit-title">
       <div className="section-heading">
@@ -748,27 +775,39 @@ function AuditTimeline({ request }: { request: KeyHandoverRequest }) {
           <p className="eyebrow">Audit timeline</p>
           <h2 id="audit-title">Activity history</h2>
         </div>
-        <span>Immutable local events</span>
+        <div className="history-controls">
+          <span>{request.audit.length} events</span>
+          <button
+            className="quiet"
+            aria-expanded={expanded}
+            aria-controls={`activity-history-${request.requestNumber}`}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? "Collapse history" : "Expand history"}
+          </button>
+        </div>
       </div>
-      <ol>
-        {request.audit
-          .slice()
-          .reverse()
-          .map((audit) => (
-            <li key={audit.id}>
-              <span className="timeline-dot" />
-              <div>
-                <strong>{audit.eventType}</strong>
-                <p>
-                  {audit.actor} · {audit.timestamp}
-                </p>
-                <small>
-                  {audit.correlationId} · {audit.causationId}
-                </small>
-              </div>
-            </li>
-          ))}
-      </ol>
+      {expanded && (
+        <ol id={`activity-history-${request.requestNumber}`}>
+          {request.audit
+            .slice()
+            .reverse()
+            .map((audit) => (
+              <li key={audit.id}>
+                <span className="timeline-dot" />
+                <div>
+                  <strong>{audit.eventType}</strong>
+                  <p>
+                    {audit.actor} · {audit.timestamp}
+                  </p>
+                  <small>
+                    {audit.correlationId} · {audit.causationId}
+                  </small>
+                </div>
+              </li>
+            ))}
+        </ol>
+      )}
     </section>
   );
 }

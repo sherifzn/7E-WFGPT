@@ -32,6 +32,7 @@ public final class KeyHandoverDemoService {
   private final DemoNotificationConnector notifications = new DemoNotificationConnector();
   private final KeyHandoverApplicationService service;
   private final Path dataDirectory;
+  private final boolean localDevelopmentMode;
   private int sequence;
 
   public KeyHandoverDemoService() {
@@ -39,7 +40,12 @@ public final class KeyHandoverDemoService {
   }
 
   public KeyHandoverDemoService(Path dataDirectory) {
+    this(dataDirectory, true);
+  }
+
+  KeyHandoverDemoService(Path dataDirectory, boolean localDevelopmentMode) {
     this.dataDirectory = dataDirectory;
+    this.localDevelopmentMode = localDevelopmentMode;
     store = new PathBackedKeyHandoverStateStore(dataDirectory.resolve("key-handover-state.bin"));
     audits = new PersistentDemoAuditSink(dataDirectory.resolve("audit-events.tsv"));
     SlicePolicies policies = policies();
@@ -76,6 +82,8 @@ public final class KeyHandoverDemoService {
       if ("GET".equals(method) && parts.length == 1) return ok(requestJson(state));
       if ("GET".equals(method) && parts.length == 2 && "audit".equals(parts[1]))
         return ok(auditJson(state));
+      if ("GET".equals(method) && parts.length == 2 && "notification".equals(parts[1]))
+        return ok(notificationJson(state));
       if ("GET".equals(method) && parts.length == 2 && "hold".equals(parts[1]))
         return ok(holdJson(state));
       if (!"POST".equals(method)) return notFound();
@@ -130,6 +138,17 @@ public final class KeyHandoverDemoService {
           state.stateVersion(),
           correlation(number),
           causation(number, "retry"));
+    if (matches(action, "notification", "fail-next")) {
+      if (!localDevelopmentMode)
+        throw new ValidationFailedException("Notification failure simulation is unavailable");
+      service.recordNotificationFailureSimulation(
+          state.requestId(),
+          actor(parameters),
+          correlation(parameters, number),
+          causation(parameters, number, "notification-failure-simulation"));
+      notifications.failNext();
+      return state;
+    }
     if (matches(action, "hold", "remediation"))
       return service.recordHoldRemediation(
           state.requestId(),
@@ -382,6 +401,16 @@ public final class KeyHandoverDemoService {
         + field(
             "notification",
             state.notificationState().map(value -> label(value.status())).orElse("Not started"))
+        + ",\"notificationAttempts\":"
+        + state.notificationState().map(NotificationState::attemptCount).orElse(0)
+        + ","
+        + field(
+            "notificationFailure",
+            state
+                .notificationState()
+                .flatMap(NotificationState::lastFailureReference)
+                .map(FailureReference::value)
+                .orElse(""))
         + ","
         + field(
             "exceptionDecision",
@@ -400,6 +429,24 @@ public final class KeyHandoverDemoService {
         + auditJson(state)
         + ",\"hold\":"
         + holdJsonOrNull(state)
+        + "}";
+  }
+
+  private static String notificationJson(KeyHandoverState state) {
+    NotificationState notification =
+        state
+            .notificationState()
+            .orElseThrow(() -> new ValidationFailedException("No notification status is available"));
+    return "{"
+        + field("status", label(notification.status()))
+        + ",\"attemptCount\":"
+        + notification.attemptCount()
+        + ","
+        + field(
+            "failureReason",
+            notification.lastFailureReference().map(FailureReference::value).orElse(""))
+        + ","
+        + field("lastAttemptAt", state.updatedAt().toString())
         + "}";
   }
 

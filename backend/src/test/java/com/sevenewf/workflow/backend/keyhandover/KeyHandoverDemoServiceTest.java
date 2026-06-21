@@ -273,6 +273,63 @@ final class KeyHandoverDemoServiceTest {
     assertTrue(restarted.handle("GET", "/KH-102/audit", Map.of()).body().contains("HoldResolutionRecorded"));
   }
 
+  @Test
+  void simulatesAndRecoversNotificationFailureWithoutDuplicatingAuthorization(
+      @TempDir Path temporaryDirectory) {
+    KeyHandoverDemoService service = new KeyHandoverDemoService(temporaryDirectory);
+    service.handle(
+        "POST",
+        "/",
+        Map.of(
+            "propertyReference", "Demo Property 401",
+            "ownerReference", "Demo Owner 401",
+            "actor", "requester"));
+    String request = "KH-105";
+    assertEquals(
+        403,
+        service
+            .handle("POST", "/" + request + "/notification/fail-next", Map.of("actor", "requester"))
+            .status());
+    assertEquals(
+        200,
+        service
+            .handle(
+                "POST", "/" + request + "/notification/fail-next", Map.of("actor", "processOwner"))
+            .status());
+    completeAllGreen(service, request);
+
+    KeyHandoverDemoService.ApiResponse failed = service.handle("GET", "/" + request, Map.of());
+    assertEquals(200, failed.status());
+    assertTrue(failed.body().contains("Authorized"));
+    assertTrue(failed.body().contains("Failed"));
+    assertEquals(
+        200,
+        service
+            .handle("POST", "/" + request + "/notification/retry", Map.of("actor", "processOwner"))
+            .status());
+    KeyHandoverDemoService.ApiResponse delivered = service.handle("GET", "/" + request, Map.of());
+    assertTrue(delivered.body().contains("Delivered"));
+    String authorizationId = delivered.body().replaceFirst(".*\\\"authorizationId\\\":\\\"([^\\\"]+).*", "$1");
+    KeyHandoverDemoService.ApiResponse duplicate =
+        service.handle("POST", "/" + request + "/notification/retry", Map.of("actor", "processOwner"));
+    assertEquals(200, duplicate.status());
+    assertTrue(duplicate.body().contains(authorizationId));
+    String audit = service.handle("GET", "/" + request + "/audit", Map.of()).body();
+    assertTrue(audit.contains("NotificationFailureSimulationEnabled"));
+    assertTrue(audit.contains("NotificationFailed"));
+    assertTrue(audit.contains("NotificationRetryRequested"));
+    assertTrue(audit.contains("NotificationDelivered"));
+    assertTrue(audit.contains("DuplicateNotificationRetryAccepted"));
+
+    KeyHandoverDemoService productionMode =
+        new KeyHandoverDemoService(temporaryDirectory.resolve("production"), false);
+    assertEquals(
+        409,
+        productionMode
+            .handle("POST", "/KH-101/notification/fail-next", Map.of("actor", "processOwner"))
+            .status());
+  }
+
   private static KeyHandoverDemoService.ApiResponse completeToHold(
       KeyHandoverDemoService service, String requestNumber) {
     service.handle(
@@ -289,5 +346,25 @@ final class KeyHandoverDemoServiceTest {
         "POST",
         "/" + requestNumber + "/tasks/legal/complete",
         Map.of("outcome", "RED", "actor", "legalOfficer"));
+  }
+
+  private static void completeAllGreen(KeyHandoverDemoService service, String request) {
+    service.handle("POST", "/" + request + "/inspection/resume", Map.of("actor", "requester"));
+    service.handle(
+        "POST", "/" + request + "/tasks/handover/claim", Map.of("actor", "handoverOfficer"));
+    service.handle(
+        "POST",
+        "/" + request + "/tasks/handover/complete",
+        Map.of("actor", "handoverOfficer", "outcome", "GREEN"));
+    service.handle(
+        "POST", "/" + request + "/tasks/finance/claim", Map.of("actor", "financeOfficer"));
+    service.handle(
+        "POST", "/" + request + "/tasks/finance/complete", Map.of("actor", "financeOfficer"));
+    service.handle(
+        "POST", "/" + request + "/tasks/legal/claim", Map.of("actor", "legalOfficer"));
+    service.handle(
+        "POST",
+        "/" + request + "/tasks/legal/complete",
+        Map.of("actor", "legalOfficer", "outcome", "GREEN"));
   }
 }

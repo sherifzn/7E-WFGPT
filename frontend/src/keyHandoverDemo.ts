@@ -64,6 +64,8 @@ export interface KeyHandoverRequest {
   inspection: "Available" | "Waiting";
   finalDecision: RequestStatus | "";
   notification: NotificationStatus;
+  notificationAttempts: number;
+  notificationFailure: string;
   exceptionDecision: "Approve Exception" | "Reject Exception" | "";
   exceptionReason: string;
   authorizationId: string;

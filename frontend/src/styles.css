@@ -522,6 +522,26 @@ h3 {
   display: grid;
   gap: 12px;
 }
+.history-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #70829a;
+  font-size: 0.8rem;
+}
+.notification-panel {
+  display: grid;
+  gap: 5px;
+  padding: 16px;
+  border: 1px solid #dce6f0;
+  border-radius: 13px;
+  background: #fafcff;
+}
+.notification-panel p {
+  margin: 0;
+  color: #647993;
+  font-size: 0.84rem;
+}
 .audit-panel ol {
   display: grid;
   gap: 12px;

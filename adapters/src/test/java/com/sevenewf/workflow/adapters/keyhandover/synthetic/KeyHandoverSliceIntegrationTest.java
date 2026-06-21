@@ -544,7 +544,7 @@ final class KeyHandoverSliceIntegrationTest {
     KeyHandoverState beforeLegal = state;
     assertThrows(TransientConnectorException.class, () -> context.completeLegal(beforeLegal));
     KeyHandoverState failed = context.store.findById(state.requestId()).orElseThrow();
-    assertEquals(RequestStatus.NOTIFICATION_FAILED, failed.status());
+    assertEquals(RequestStatus.AUTHORIZED, failed.status());
     assertTrue(failed.notificationState().orElseThrow().idempotencyKey() instanceof IdempotencyKey);
     SliceContext restarted = context.restart();
     KeyHandoverState delivered =

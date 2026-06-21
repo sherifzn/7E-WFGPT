@@ -569,11 +569,25 @@ public final class KeyHandoverApplicationService {
     if (state.authorization().isEmpty() || state.notificationState().isEmpty())
       throw new ValidationFailedException("No notification recovery is required");
     NotificationState notification = state.notificationState().orElseThrow();
+    if (notification.status() == NotificationDeliveryStatus.DELIVERED) {
+      appendAudit(
+          audit(
+              "DuplicateNotificationRetryAccepted",
+              state,
+              actor.actorId(),
+              correlationId,
+              causationId,
+              state.authorization().orElseThrow().evidenceReferences(),
+              Map.of("attemptCount", Integer.toString(notification.attemptCount()))));
+      return state;
+    }
+    if (notification.status() != NotificationDeliveryStatus.FAILED)
+      throw new ValidationFailedException("Notification retry is not available for this request state");
     if (notification.attemptCount() >= policies.maxConnectorAttempts()) {
       KeyHandoverState exhausted =
           next(
               state,
-              RequestStatus.NOTIFICATION_FAILED,
+              RequestStatus.AUTHORIZED,
               state.inspectionStatus(),
               state.inspectionChildWorkflowId(),
               state.branches(),
@@ -603,7 +617,7 @@ public final class KeyHandoverApplicationService {
     KeyHandoverState recoveryStarted =
         next(
             state,
-            RequestStatus.NOTIFICATION_FAILED,
+            RequestStatus.AUTHORIZED,
             state.inspectionStatus(),
             state.inspectionChildWorkflowId(),
             state.branches(),
@@ -624,6 +638,37 @@ public final class KeyHandoverApplicationService {
                     state.authorization().orElseThrow().evidenceReferences(),
                     Map.of("attempt", Integer.toString(notification.attemptCount() + 1)))));
     return deliverNotification(saved, actor, correlationId, causationId);
+  }
+
+  public void recordNotificationFailureSimulation(
+      KeyHandoverRequestId requestId,
+      Actor actor,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    KeyHandoverState state = requireState(requestId);
+    try {
+      authorizationService.require(actor, Permission.RETRY_NOTIFICATION);
+    } catch (RuntimeException exception) {
+      appendAudit(
+          audit(
+              "UnauthorizedNotificationFailureSimulationAttempt",
+              state,
+              actor.actorId(),
+              correlationId,
+              causationId,
+              List.of(),
+              Map.of()));
+      throw exception;
+    }
+    appendAudit(
+        audit(
+            "NotificationFailureSimulationEnabled",
+            state,
+            actor.actorId(),
+            correlationId,
+            causationId,
+            List.of(),
+            Map.of()));
   }
 
   public KeyHandoverState decideException(ExceptionDecisionCommand command) {
@@ -1397,7 +1442,7 @@ public final class KeyHandoverApplicationService {
       KeyHandoverState next =
           next(
               state,
-              RequestStatus.NOTIFICATION_FAILED,
+              RequestStatus.AUTHORIZED,
               state.inspectionStatus(),
               state.inspectionChildWorkflowId(),
               state.branches(),
