@@ -3,7 +3,9 @@ package com.sevenewf.workflow.domain.keyhandover;
 import com.sevenewf.workflow.domain.common.DomainVersion;
 import com.sevenewf.workflow.domain.common.Validation;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.*;
+import com.sevenewf.workflow.domain.keyhandover.hold.HoldRecord;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -21,6 +23,7 @@ public record KeyHandoverState(
     Optional<ExceptionDecision> exceptionDecision,
     Optional<KeyReleaseAuthorization> authorization,
     Optional<NotificationState> notificationState,
+    List<HoldRecord> holds,
     Instant updatedAt) {
   public KeyHandoverState {
     Validation.requirePresent(requestId, "requestId");
@@ -37,6 +40,7 @@ public record KeyHandoverState(
     exceptionDecision = exceptionDecision == null ? Optional.empty() : exceptionDecision;
     authorization = authorization == null ? Optional.empty() : authorization;
     notificationState = notificationState == null ? Optional.empty() : notificationState;
+    holds = List.copyOf(Validation.requirePresent(holds, "holds"));
     Validation.requirePresent(updatedAt, "updatedAt");
   }
 
@@ -49,6 +53,7 @@ public record KeyHandoverState(
       Optional<ExceptionDecision> newExceptionDecision,
       Optional<KeyReleaseAuthorization> newAuthorization,
       Optional<NotificationState> newNotificationState,
+      List<HoldRecord> newHolds,
       Instant now) {
     return new KeyHandoverState(
         requestId,
@@ -64,6 +69,7 @@ public record KeyHandoverState(
         newExceptionDecision,
         newAuthorization,
         newNotificationState,
+        newHolds,
         now);
   }
 }

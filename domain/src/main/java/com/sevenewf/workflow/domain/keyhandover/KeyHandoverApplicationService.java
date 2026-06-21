@@ -7,12 +7,14 @@ import com.sevenewf.workflow.domain.common.DomainVersion;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.*;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverPorts.*;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.*;
+import com.sevenewf.workflow.domain.keyhandover.hold.*;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 
 public final class KeyHandoverApplicationService {
@@ -31,6 +33,8 @@ public final class KeyHandoverApplicationService {
   private final RetryScheduler retryScheduler;
   private final AutomaticAssignmentService automaticAssignmentService;
   private final SlicePolicies policies;
+  private final HoldPolicy holdPolicy;
+  private final BusinessCalendar businessCalendar;
 
   public KeyHandoverApplicationService(
       PropertyConnector propertyConnector,
@@ -48,6 +52,44 @@ public final class KeyHandoverApplicationService {
       RetryScheduler retryScheduler,
       AutomaticAssignmentService automaticAssignmentService,
       SlicePolicies policies) {
+    this(
+        propertyConnector,
+        ownerIdentityConnector,
+        inspectionConnector,
+        financeConnector,
+        legalConnector,
+        notificationConnector,
+        evidenceStore,
+        decisionService,
+        auditSink,
+        clock,
+        stateStore,
+        authorizationService,
+        retryScheduler,
+        automaticAssignmentService,
+        policies,
+        new LocalKeyHandoverHoldPolicy(),
+        (start, businessDays) -> start.plus(Duration.ofDays(businessDays.value())));
+  }
+
+  public KeyHandoverApplicationService(
+      PropertyConnector propertyConnector,
+      OwnerIdentityConnector ownerIdentityConnector,
+      InspectionConnector inspectionConnector,
+      FinanceConnector financeConnector,
+      LegalConnector legalConnector,
+      NotificationConnector notificationConnector,
+      EvidenceStore evidenceStore,
+      DecisionService decisionService,
+      AuditSink auditSink,
+      Clock clock,
+      KeyHandoverStateStore stateStore,
+      AuthorizationService authorizationService,
+      RetryScheduler retryScheduler,
+      AutomaticAssignmentService automaticAssignmentService,
+      SlicePolicies policies,
+      HoldPolicy holdPolicy,
+      BusinessCalendar businessCalendar) {
     this.propertyConnector = propertyConnector;
     this.ownerIdentityConnector = ownerIdentityConnector;
     this.inspectionConnector = inspectionConnector;
@@ -63,6 +105,8 @@ public final class KeyHandoverApplicationService {
     this.retryScheduler = retryScheduler;
     this.automaticAssignmentService = automaticAssignmentService;
     this.policies = policies;
+    this.holdPolicy = holdPolicy;
+    this.businessCalendar = businessCalendar;
   }
 
   public KeyHandoverState submit(KeyHandoverSubmission submission) {
@@ -104,6 +148,7 @@ public final class KeyHandoverApplicationService {
             Optional.empty(),
             Optional.empty(),
             Optional.empty(),
+            List.of(),
             now);
     List<AuditRecord> audits =
         List.of(
@@ -715,6 +760,250 @@ public final class KeyHandoverApplicationService {
         saved, command.actor(), command.correlationId(), command.causationId());
   }
 
+  public KeyHandoverState recordHoldRemediation(
+      KeyHandoverRequestId requestId,
+      ClearanceBranch branch,
+      String summary,
+      EvidenceReference supportingReference,
+      Actor actor,
+      DomainVersion expectedVersion,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    KeyHandoverState state = requireState(requestId);
+    requireHoldManager(state, actor, correlationId, causationId);
+    requireVersion(state, expectedVersion);
+    HoldRecord hold = activeHold(state);
+    if (!hold.affectedBranches().contains(branch))
+      throw new ValidationFailedException("Remediation is only available for affected branches");
+    BranchRemediation remediation =
+        new BranchRemediation(branch, summary, supportingReference, actor.actorId(), clock.now());
+    Map<ClearanceBranch, BranchRemediation> remediations = new EnumMap<>(ClearanceBranch.class);
+    remediations.putAll(hold.remediationByBranch());
+    BranchRemediation existing = remediations.put(branch, remediation);
+    if (remediation.equals(existing)) {
+      appendAudit(
+          audit(
+              "DuplicateHoldCommandAccepted",
+              state,
+              actor.actorId(),
+              correlationId,
+              causationId,
+              List.of(supportingReference),
+              Map.of("action", "remediation")));
+      return state;
+    }
+    HoldLifecycleStatus status =
+        remediations.keySet().containsAll(hold.affectedBranches())
+            ? HoldLifecycleStatus.RESOLUTION_RECORDED
+            : hold.status();
+    HoldRecord updated =
+        copyHold(hold, status, hold.expiresAt(), hold.extensionCount(), remediations);
+    KeyHandoverState next =
+        nextWithHolds(
+            state,
+            RequestStatus.HOLD,
+            state.branches(),
+            state.finalDecision(),
+            replaceHold(state, updated));
+    return commit(
+        next,
+        state.stateVersion(),
+        List.of(
+            audit(
+                "HoldResolutionRecorded",
+                next,
+                actor.actorId(),
+                correlationId,
+                causationId,
+                List.of(supportingReference),
+                Map.of("branch", branch.name()))));
+  }
+
+  public KeyHandoverState extendHold(
+      KeyHandoverRequestId requestId,
+      BusinessDays extensionDuration,
+      Actor actor,
+      DomainVersion expectedVersion,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    KeyHandoverState state = requireState(requestId);
+    requireHoldManager(state, actor, correlationId, causationId);
+    requireVersion(state, expectedVersion);
+    HoldRecord hold = activeHold(state);
+    int extensionCount = hold.extensionCount() + 1;
+    HoldTiming.validateExtensionCount(extensionCount, holdPolicy);
+    Instant expiry =
+        HoldTiming.calculateExtendedExpiryAt(
+            hold.expiresAt(), extensionDuration, holdPolicy, businessCalendar);
+    HoldRecord updated =
+        copyHold(
+            hold, HoldLifecycleStatus.EXTENDED, expiry, extensionCount, hold.remediationByBranch());
+    KeyHandoverState next =
+        nextWithHolds(
+            state,
+            RequestStatus.HOLD,
+            state.branches(),
+            state.finalDecision(),
+            replaceHold(state, updated));
+    return commit(
+        next,
+        state.stateVersion(),
+        List.of(
+            audit(
+                "HoldExtended",
+                next,
+                actor.actorId(),
+                correlationId,
+                causationId,
+                List.of(),
+                Map.of("extensionCount", Integer.toString(extensionCount)))));
+  }
+
+  public KeyHandoverState resumeHold(
+      KeyHandoverRequestId requestId,
+      Actor actor,
+      DomainVersion expectedVersion,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    KeyHandoverState state = requireState(requestId);
+    requireHoldManager(state, actor, correlationId, causationId);
+    requireVersion(state, expectedVersion);
+    HoldRecord hold = activeHold(state);
+    if (!hold.remediationByBranch().keySet().containsAll(hold.affectedBranches()))
+      throw new ValidationFailedException("Remediation is required for every affected branch");
+    if (!holdPolicy.allowsResume(hold.status()) || HoldTiming.isExpired(clock.now(), hold))
+      throw new ValidationFailedException("Expired hold must be extended before resume");
+    Map<ClearanceBranch, BranchState> branches = mutableBranches(state);
+    for (ClearanceBranch branch : hold.affectedBranches())
+      branches.put(branch, openBranch(branch, clock.now()));
+    HoldRecord resumed =
+        copyHold(
+            hold,
+            HoldLifecycleStatus.RESUMED,
+            hold.expiresAt(),
+            hold.extensionCount(),
+            hold.remediationByBranch());
+    KeyHandoverState next =
+        nextWithHolds(
+            state,
+            RequestStatus.CLEARANCE_IN_PROGRESS,
+            branches,
+            Optional.empty(),
+            replaceHold(state, resumed));
+    return commit(
+        next,
+        state.stateVersion(),
+        List.of(
+            audit(
+                "HoldResumeRequested",
+                next,
+                actor.actorId(),
+                correlationId,
+                causationId,
+                List.of(),
+                Map.of()),
+            audit(
+                "HoldResumed",
+                next,
+                actor.actorId(),
+                correlationId,
+                causationId,
+                List.of(),
+                Map.of())));
+  }
+
+  public KeyHandoverState rejectHold(
+      KeyHandoverRequestId requestId,
+      Actor actor,
+      DomainVersion expectedVersion,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    return completeHoldTerminalAction(
+        requestId,
+        actor,
+        expectedVersion,
+        correlationId,
+        causationId,
+        HoldLifecycleStatus.REJECTED,
+        RequestStatus.HOLD_REJECTED,
+        "HoldRejected");
+  }
+
+  public KeyHandoverState cancelHold(
+      KeyHandoverRequestId requestId,
+      Actor actor,
+      DomainVersion expectedVersion,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    return completeHoldTerminalAction(
+        requestId,
+        actor,
+        expectedVersion,
+        correlationId,
+        causationId,
+        HoldLifecycleStatus.CANCELLED,
+        RequestStatus.CANCELLED,
+        "HoldCancelled");
+  }
+
+  public KeyHandoverState evaluateHold(
+      KeyHandoverRequestId requestId,
+      Actor actor,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    KeyHandoverState state = requireState(requestId);
+    HoldRecord hold = activeHold(state);
+    if (HoldTiming.isExpired(clock.now(), hold)) {
+      HoldRecord expired =
+          copyHold(
+              hold,
+              HoldLifecycleStatus.EXPIRED,
+              hold.expiresAt(),
+              hold.extensionCount(),
+              hold.remediationByBranch());
+      KeyHandoverState next =
+          nextWithHolds(
+              state,
+              RequestStatus.HOLD,
+              state.branches(),
+              state.finalDecision(),
+              replaceHold(state, expired));
+      return commit(
+          next,
+          state.stateVersion(),
+          List.of(
+              audit(
+                  "HoldExpired",
+                  next,
+                  actor.actorId(),
+                  correlationId,
+                  causationId,
+                  List.of(),
+                  Map.of())));
+    }
+    if (!HoldTiming.isReviewDue(clock.now(), hold)) return state;
+    appendAudit(
+        audit(
+            "HoldReviewDue",
+            state,
+            actor.actorId(),
+            correlationId,
+            causationId,
+            List.of(),
+            Map.of()));
+    if (holdPolicy.requiresEscalationWhenReviewDue())
+      appendAudit(
+          audit(
+              "HoldEscalationRequired",
+              state,
+              actor.actorId(),
+              correlationId,
+              causationId,
+              List.of(),
+              Map.of()));
+    return state;
+  }
+
   public void deliverPendingAudits() {
     for (AuditRecord audit : stateStore.pendingAudits()) {
       auditSink.emit(audit);
@@ -742,6 +1031,122 @@ public final class KeyHandoverApplicationService {
   private void appendAudit(AuditRecord audit) {
     stateStore.appendPendingAudit(audit);
     deliverPendingAudits();
+  }
+
+  private KeyHandoverState completeHoldTerminalAction(
+      KeyHandoverRequestId requestId,
+      Actor actor,
+      DomainVersion expectedVersion,
+      CorrelationId correlationId,
+      CausationId causationId,
+      HoldLifecycleStatus holdStatus,
+      RequestStatus requestStatus,
+      String eventType) {
+    KeyHandoverState state = requireState(requestId);
+    requireHoldManager(state, actor, correlationId, causationId);
+    requireVersion(state, expectedVersion);
+    HoldRecord hold = activeHold(state);
+    HoldRecord updated =
+        copyHold(
+            hold, holdStatus, hold.expiresAt(), hold.extensionCount(), hold.remediationByBranch());
+    KeyHandoverState next =
+        nextWithHolds(
+            state,
+            requestStatus,
+            state.branches(),
+            state.finalDecision(),
+            replaceHold(state, updated));
+    return commit(
+        next,
+        state.stateVersion(),
+        List.of(
+            audit(
+                eventType,
+                next,
+                actor.actorId(),
+                correlationId,
+                causationId,
+                List.of(),
+                Map.of())));
+  }
+
+  private void requireHoldManager(
+      KeyHandoverState state, Actor actor, CorrelationId correlationId, CausationId causationId) {
+    try {
+      authorizationService.require(actor, Permission.MANAGE_HOLD);
+      boolean isProcessOwner =
+          actor.eligibleTeamsOrRoles().stream()
+              .map(TeamOrRoleRef::value)
+              .anyMatch(
+                  value -> value.equals("process-owner-role") || value.equals("process-owner"));
+      if (!isProcessOwner
+          || !holdPolicy.eligibleHoldManagerRoles().contains(HoldRole.PROCESS_OWNER))
+        throw new AuthorizationDeniedException("Only Process Owner may manage holds");
+    } catch (RuntimeException exception) {
+      appendAudit(
+          audit(
+              "UnauthorizedHoldAction",
+              state,
+              actor.actorId(),
+              correlationId,
+              causationId,
+              List.of(),
+              Map.of()));
+      throw exception;
+    }
+  }
+
+  private static HoldRecord activeHold(KeyHandoverState state) {
+    if (state.status() != RequestStatus.HOLD)
+      throw new ValidationFailedException(
+          "Hold management is not available for this request state");
+    return state.holds().stream()
+        .filter(
+            hold ->
+                hold.status() != HoldLifecycleStatus.RESUMED
+                    && hold.status() != HoldLifecycleStatus.REJECTED
+                    && hold.status() != HoldLifecycleStatus.CANCELLED)
+        .reduce((first, second) -> second)
+        .orElseThrow(() -> new ValidationFailedException("No active hold exists"));
+  }
+
+  private static HoldRecord copyHold(
+      HoldRecord hold,
+      HoldLifecycleStatus status,
+      Instant expiresAt,
+      int extensionCount,
+      Map<ClearanceBranch, BranchRemediation> remediations) {
+    return new HoldRecord(
+        hold.holdId(),
+        hold.requestId(),
+        hold.cycleNumber(),
+        hold.policyReference(),
+        hold.policy(),
+        status,
+        hold.reason(),
+        hold.affectedBranches(),
+        hold.owner(),
+        hold.createdBy(),
+        hold.startedAt(),
+        hold.reviewAt(),
+        expiresAt,
+        extensionCount,
+        remediations,
+        hold.stateVersion(),
+        hold.correlationId(),
+        hold.causationId());
+  }
+
+  private static List<HoldRecord> appendHold(List<HoldRecord> holds, HoldRecord hold) {
+    java.util.ArrayList<HoldRecord> result = new java.util.ArrayList<>(holds);
+    result.add(hold);
+    return List.copyOf(result);
+  }
+
+  private static List<HoldRecord> replaceHold(KeyHandoverState state, HoldRecord updated) {
+    return state.holds().stream()
+        .map(hold -> hold.holdId().equals(updated.holdId()) ? updated : hold)
+        .toList();
   }
 
   private static TeamOrRoleRef actorRole(Actor actor) {
@@ -789,6 +1194,7 @@ public final class KeyHandoverApplicationService {
         };
     Optional<KeyReleaseAuthorization> authorization = Optional.empty();
     Optional<NotificationState> notification = Optional.empty();
+    List<HoldRecord> holds = state.holds();
     if (decision.action() == FinalAction.AUTHORIZE_RELEASE) {
       KeyReleaseAuthorization release =
           new KeyReleaseAuthorization(
@@ -805,29 +1211,68 @@ public final class KeyHandoverApplicationService {
                   0,
                   Optional.empty()));
     }
+    if (decision.action() == FinalAction.HOLD) {
+      Set<ClearanceBranch> affectedBranches =
+          state.branches().values().stream()
+              .filter(branch -> branch.outcome().orElseThrow() == ClearanceOutcome.RED)
+              .map(BranchState::branch)
+              .collect(java.util.stream.Collectors.toUnmodifiableSet());
+      Instant startedAt = clock.now();
+      HoldRecord hold =
+          new HoldRecord(
+              new HoldId("hold-" + state.requestId().value() + "-" + (state.holds().size() + 1)),
+              state.requestId(),
+              state.holds().size() + 1,
+              holdPolicy.policyReference(),
+              holdPolicy,
+              HoldLifecycleStatus.ACTIVE,
+              "One or more clearance branches are RED",
+              affectedBranches,
+              actor.actorId(),
+              actor.actorId(),
+              startedAt,
+              HoldTiming.calculateReviewAt(startedAt, holdPolicy, businessCalendar),
+              HoldTiming.calculateInitialExpiryAt(startedAt, holdPolicy, businessCalendar),
+              0,
+              Map.of(),
+              new DomainVersion(state.stateVersion().value() + 1),
+              correlationId,
+              causationId);
+      holds = appendHold(state.holds(), hold);
+    }
     KeyHandoverState next =
-        next(
-            state,
-            status,
-            state.inspectionStatus(),
-            state.inspectionChildWorkflowId(),
-            state.branches(),
-            Optional.of(decision),
-            authorization,
-            notification);
-    KeyHandoverState saved =
-        commit(
+        decision.action() == FinalAction.HOLD
+            ? nextWithHolds(state, status, state.branches(), Optional.of(decision), holds)
+            : next(
+                state,
+                status,
+                state.inspectionStatus(),
+                state.inspectionChildWorkflowId(),
+                state.branches(),
+                Optional.of(decision),
+                authorization,
+                notification);
+    List<AuditRecord> decisionAudits = new java.util.ArrayList<>();
+    decisionAudits.add(
+        audit(
+            "FinalDecisionApplied",
             next,
-            state.stateVersion(),
-            List.of(
-                audit(
-                    "FinalDecisionApplied",
-                    next,
-                    actor.actorId(),
-                    correlationId,
-                    causationId,
-                    evidence,
-                    Map.of())));
+            actor.actorId(),
+            correlationId,
+            causationId,
+            evidence,
+            Map.of()));
+    if (decision.action() == FinalAction.HOLD)
+      decisionAudits.add(
+          audit(
+              "HoldCreated",
+              next,
+              actor.actorId(),
+              correlationId,
+              causationId,
+              List.of(),
+              Map.of("holdId", next.holds().getLast().holdId().value())));
+    KeyHandoverState saved = commit(next, state.stateVersion(), List.copyOf(decisionAudits));
     return authorization.isPresent()
         ? deliverNotification(saved, actor, correlationId, causationId)
         : saved;
@@ -976,31 +1421,32 @@ public final class KeyHandoverApplicationService {
 
   private Map<ClearanceBranch, BranchState> openBranches(Instant now) {
     Map<ClearanceBranch, BranchState> branches = new EnumMap<>(ClearanceBranch.class);
-    for (ClearanceBranch branch : ClearanceBranch.values()) {
-      HumanTaskPolicy policy = policies.taskPolicies().get(branch);
-      Optional<ActorId> assignee = Optional.empty();
-      BranchStatus status = BranchStatus.OPEN;
-      if (policy.assignmentMode() == AssignmentMode.AUTOMATIC) {
-        Actor automaticallyAssigned = automaticAssignmentService.assign(policy);
-        enforceEligibleAndAuthorized(policy, automaticallyAssigned);
-        assignee = Optional.of(automaticallyAssigned.actorId());
-        status = BranchStatus.CLAIMED;
-      }
-      branches.put(
-          branch,
-          new BranchState(
-              branch,
-              status,
-              policy,
-              assignee,
-              Optional.empty(),
-              Optional.empty(),
-              List.of(),
-              now,
-              Optional.empty(),
-              Optional.empty()));
-    }
+    for (ClearanceBranch branch : ClearanceBranch.values())
+      branches.put(branch, openBranch(branch, now));
     return branches;
+  }
+
+  private BranchState openBranch(ClearanceBranch branch, Instant now) {
+    HumanTaskPolicy policy = policies.taskPolicies().get(branch);
+    Optional<ActorId> assignee = Optional.empty();
+    BranchStatus status = BranchStatus.OPEN;
+    if (policy.assignmentMode() == AssignmentMode.AUTOMATIC) {
+      Actor automaticallyAssigned = automaticAssignmentService.assign(policy);
+      enforceEligibleAndAuthorized(policy, automaticallyAssigned);
+      assignee = Optional.of(automaticallyAssigned.actorId());
+      status = BranchStatus.CLAIMED;
+    }
+    return new BranchState(
+        branch,
+        status,
+        policy,
+        assignee,
+        Optional.empty(),
+        Optional.empty(),
+        List.of(),
+        now,
+        Optional.empty(),
+        Optional.empty());
   }
 
   private void enforceEligibleAndAuthorized(HumanTaskPolicy policy, Actor actor) {
@@ -1028,6 +1474,7 @@ public final class KeyHandoverApplicationService {
         state.exceptionDecision(),
         authorization,
         notification,
+        state.holds(),
         clock.now());
   }
 
@@ -1046,6 +1493,26 @@ public final class KeyHandoverApplicationService {
         exceptionDecision,
         authorization,
         notification,
+        state.holds(),
+        clock.now());
+  }
+
+  private KeyHandoverState nextWithHolds(
+      KeyHandoverState state,
+      RequestStatus status,
+      Map<ClearanceBranch, BranchState> branches,
+      Optional<FinalDecision> decision,
+      List<HoldRecord> holds) {
+    return state.next(
+        status,
+        state.inspectionStatus(),
+        state.inspectionChildWorkflowId(),
+        branches,
+        decision,
+        state.exceptionDecision(),
+        Optional.empty(),
+        Optional.empty(),
+        holds,
         clock.now());
   }
 

@@ -105,6 +105,8 @@ public final class KeyHandoverTypes {
     CLEARANCE_IN_PROGRESS,
     AUTHORIZED,
     HOLD,
+    HOLD_REJECTED,
+    CANCELLED,
     EXCEPTION_APPROVAL_REQUIRED,
     EXCEPTION_REJECTED,
     NOTIFICATION_FAILED
@@ -136,7 +138,8 @@ public final class KeyHandoverTypes {
     REASSIGN_TASK,
     EMERGENCY_REASSIGN,
     RETRY_NOTIFICATION,
-    DECIDE_EXCEPTION
+    DECIDE_EXCEPTION,
+    MANAGE_HOLD
   }
 
   public record Actor(

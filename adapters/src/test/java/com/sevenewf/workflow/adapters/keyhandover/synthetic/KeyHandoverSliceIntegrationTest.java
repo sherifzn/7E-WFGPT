@@ -623,6 +623,108 @@ final class KeyHandoverSliceIntegrationTest {
     assertTrue(context.evidence.calls() >= 3);
   }
 
+  @Test
+  void redDecisionCreatesOneDurableHoldAndDoesNotAuthorizeOrNotify() throws Exception {
+    Path snapshot = Files.createTempFile("key-handover-hold", ".snapshot");
+    SliceContext context =
+        new SliceContext("hold-red", new TestOnlyPathBackedKeyHandoverStateStore(snapshot));
+    KeyHandoverState held = context.completeToHold(Set.of(ClearanceBranch.HANDOVER));
+
+    assertEquals(RequestStatus.HOLD, held.status());
+    assertEquals(1, held.holds().size());
+    assertEquals(Set.of(ClearanceBranch.HANDOVER), held.holds().getFirst().affectedBranches());
+    assertTrue(held.authorization().isEmpty());
+    assertTrue(held.notificationState().isEmpty());
+    assertTrue(context.audit.hasEvent("HoldCreated"));
+
+    KeyHandoverState reloaded =
+        new SliceContext("hold-red", new TestOnlyPathBackedKeyHandoverStateStore(snapshot))
+            .store
+            .findById(held.requestId())
+            .orElseThrow();
+    assertEquals(held.holds(), reloaded.holds());
+  }
+
+  @Test
+  void onlyProcessOwnerCanRemediateAndResumeAffectedRedBranches() {
+    SliceContext context = new SliceContext("hold-resume");
+    KeyHandoverState held =
+        context.completeToHold(Set.of(ClearanceBranch.HANDOVER, ClearanceBranch.LEGAL));
+    KeyHandoverState initialHold = held;
+    assertThrows(
+        AuthorizationDeniedException.class,
+        () ->
+            context.service.recordHoldRemediation(
+                initialHold.requestId(),
+                ClearanceBranch.HANDOVER,
+                "resolved",
+                new EvidenceReference("resolution"),
+                context.teamHead(),
+                initialHold.stateVersion(),
+                context.correlation(),
+                context.causation("unauthorized")));
+    held = context.remediate(held, ClearanceBranch.HANDOVER);
+    KeyHandoverState incomplete = held;
+    assertThrows(
+        ValidationFailedException.class,
+        () ->
+            context.service.resumeHold(
+                incomplete.requestId(),
+                context.processOwner(),
+                incomplete.stateVersion(),
+                context.correlation(),
+                context.causation("resume")));
+    held = context.remediate(held, ClearanceBranch.LEGAL);
+    KeyHandoverState resumed = context.resumeHold(held);
+    assertEquals(RequestStatus.CLEARANCE_IN_PROGRESS, resumed.status());
+    assertEquals(BranchStatus.OPEN, resumed.branches().get(ClearanceBranch.HANDOVER).status());
+    assertEquals(BranchStatus.OPEN, resumed.branches().get(ClearanceBranch.LEGAL).status());
+    assertEquals(
+        ClearanceOutcome.GREEN,
+        resumed.branches().get(ClearanceBranch.FINANCE).outcome().orElseThrow());
+    assertTrue(context.audit.hasEvent("UnauthorizedHoldAction"));
+    assertTrue(context.audit.hasEvent("HoldResumed"));
+  }
+
+  @Test
+  void expiredHoldRequiresExtensionBeforeResumeAndEnforcesPolicyLimit() {
+    SliceContext context = new SliceContext("hold-expiry");
+    KeyHandoverState held = context.completeToHold(Set.of(ClearanceBranch.HANDOVER));
+    held = context.remediate(held, ClearanceBranch.HANDOVER);
+    context.clock.setNow(held.holds().getFirst().expiresAt());
+    KeyHandoverState expired =
+        context.service.evaluateHold(
+            held.requestId(),
+            context.processOwner(),
+            context.correlation(),
+            context.causation("expiry"));
+    assertThrows(ValidationFailedException.class, () -> context.resumeHold(expired));
+    KeyHandoverState extended = context.extendHold(expired, 5);
+    KeyHandoverState secondExtension = context.extendHold(extended, 5);
+    assertThrows(IllegalArgumentException.class, () -> context.extendHold(secondExtension, 5));
+    assertTrue(context.audit.hasEvent("HoldExpired"));
+    assertTrue(context.audit.hasEvent("HoldExtended"));
+  }
+
+  @Test
+  void rejectAndCancelHoldAreTerminalWithoutAuthorization() {
+    SliceContext rejectedContext = new SliceContext("hold-rejected");
+    KeyHandoverState rejected =
+        rejectedContext.rejectHold(
+            rejectedContext.completeToHold(Set.of(ClearanceBranch.HANDOVER)));
+    assertEquals(RequestStatus.HOLD_REJECTED, rejected.status());
+    assertTrue(rejected.authorization().isEmpty());
+    assertTrue(rejectedContext.audit.hasEvent("HoldRejected"));
+
+    SliceContext cancelledContext = new SliceContext("hold-cancelled");
+    KeyHandoverState cancelled =
+        cancelledContext.cancelHold(
+            cancelledContext.completeToHold(Set.of(ClearanceBranch.HANDOVER)));
+    assertEquals(RequestStatus.CANCELLED, cancelled.status());
+    assertTrue(cancelled.notificationState().isEmpty());
+    assertTrue(cancelledContext.audit.hasEvent("HoldCancelled"));
+  }
+
   private static final class SliceContext {
     final BusinessKey businessKey;
     final PropertyReference property = new PropertyReference("synthetic-property");
@@ -684,6 +786,80 @@ final class KeyHandoverSliceIntegrationTest {
       return service.submit(
           new KeyHandoverSubmission(
               businessKey, property, owner, submitter(), correlation(), causation("submit")));
+    }
+
+    KeyHandoverState completeToHold(Set<ClearanceBranch> redBranches) {
+      KeyHandoverState state = submit();
+      state = claim(state, ClearanceBranch.HANDOVER, handoverActor());
+      state =
+          complete(
+              state,
+              ClearanceBranch.HANDOVER,
+              redBranches.contains(ClearanceBranch.HANDOVER)
+                  ? ClearanceOutcome.RED
+                  : ClearanceOutcome.GREEN,
+              handoverActor());
+      state = claim(state, ClearanceBranch.FINANCE, financeActor());
+      state = completeFinance(state);
+      state = claim(state, ClearanceBranch.LEGAL, legalActor());
+      return service.completeLegalBranch(
+          state.requestId(),
+          legalActor(),
+          redBranches.contains(ClearanceBranch.LEGAL)
+              ? ClearanceOutcome.RED
+              : ClearanceOutcome.GREEN,
+          state.stateVersion(),
+          correlation(),
+          causation("legal"));
+    }
+
+    KeyHandoverState remediate(KeyHandoverState state, ClearanceBranch branch) {
+      return service.recordHoldRemediation(
+          state.requestId(),
+          branch,
+          "Synthetic remediation",
+          new EvidenceReference("remediation-" + branch),
+          processOwner(),
+          state.stateVersion(),
+          correlation(),
+          causation("remediation-" + branch));
+    }
+
+    KeyHandoverState resumeHold(KeyHandoverState state) {
+      return service.resumeHold(
+          state.requestId(),
+          processOwner(),
+          state.stateVersion(),
+          correlation(),
+          causation("resume"));
+    }
+
+    KeyHandoverState extendHold(KeyHandoverState state, int businessDays) {
+      return service.extendHold(
+          state.requestId(),
+          new com.sevenewf.workflow.domain.keyhandover.hold.BusinessDays(businessDays),
+          processOwner(),
+          state.stateVersion(),
+          correlation(),
+          causation("extend"));
+    }
+
+    KeyHandoverState rejectHold(KeyHandoverState state) {
+      return service.rejectHold(
+          state.requestId(),
+          processOwner(),
+          state.stateVersion(),
+          correlation(),
+          causation("reject"));
+    }
+
+    KeyHandoverState cancelHold(KeyHandoverState state) {
+      return service.cancelHold(
+          state.requestId(),
+          processOwner(),
+          state.stateVersion(),
+          correlation(),
+          causation("cancel"));
     }
 
     KeyHandoverState claim(KeyHandoverState state, ClearanceBranch branch, Actor actor) {
@@ -787,6 +963,14 @@ final class KeyHandoverSliceIntegrationTest {
           EnumSet.of(Permission.EMERGENCY_REASSIGN),
           Set.of("handover-scope"),
           handoverRole());
+    }
+
+    Actor processOwner() {
+      return actor(
+          "process-owner",
+          EnumSet.allOf(Permission.class),
+          Set.of(),
+          new TeamOrRoleRef("process-owner-role"));
     }
 
     Actor retryActor() {

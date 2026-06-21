@@ -75,4 +75,14 @@ public final class LocalKeyHandoverHoldPolicy implements HoldPolicy {
         || status == HoldLifecycleStatus.REJECTED
         || status == HoldLifecycleStatus.CANCELLED;
   }
+
+  @Override
+  public boolean equals(Object other) {
+    return other instanceof LocalKeyHandoverHoldPolicy;
+  }
+
+  @Override
+  public int hashCode() {
+    return LocalKeyHandoverHoldPolicy.class.hashCode();
+  }
 }

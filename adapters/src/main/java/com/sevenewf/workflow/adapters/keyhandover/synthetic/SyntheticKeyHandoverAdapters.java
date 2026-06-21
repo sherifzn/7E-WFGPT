@@ -7,6 +7,7 @@ import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.*;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverPorts.*;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverState;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.*;
+import com.sevenewf.workflow.domain.keyhandover.hold.*;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -180,7 +181,7 @@ public final class SyntheticKeyHandoverAdapters {
   }
 
   private static final class StateFileCodec {
-    private static final int FORMAT_VERSION = 2;
+    private static final int FORMAT_VERSION = 3;
 
     private StateFileCodec() {}
 
@@ -209,7 +210,7 @@ public final class SyntheticKeyHandoverAdapters {
         List<AuditRecord> pending)
         throws IOException {
       int formatVersion = data.readInt();
-      if (formatVersion != 1 && formatVersion != FORMAT_VERSION)
+      if (formatVersion < 1 || formatVersion > FORMAT_VERSION)
         throw new IOException("Unsupported test snapshot format");
       int stateCount = data.readInt();
       for (int index = 0; index < stateCount; index++) {
@@ -249,10 +250,13 @@ public final class SyntheticKeyHandoverAdapters {
       data.writeBoolean(state.notificationState().isPresent());
       if (state.notificationState().isPresent())
         writeNotification(data, state.notificationState().orElseThrow());
+      data.writeInt(state.holds().size());
+      for (HoldRecord hold : state.holds()) writeHold(data, hold);
       writeInstant(data, state.updatedAt());
     }
 
-    private static KeyHandoverState readState(DataInputStream data, int formatVersion) throws IOException {
+    private static KeyHandoverState readState(DataInputStream data, int formatVersion)
+        throws IOException {
       KeyHandoverRequestId requestId = new KeyHandoverRequestId(data.readUTF());
       DomainVersion version = new DomainVersion(data.readInt());
       BusinessKey businessKey = new BusinessKey(data.readUTF());
@@ -278,6 +282,11 @@ public final class SyntheticKeyHandoverAdapters {
           data.readBoolean() ? Optional.of(readAuthorization(data)) : Optional.empty();
       Optional<NotificationState> notification =
           data.readBoolean() ? Optional.of(readNotification(data)) : Optional.empty();
+      List<HoldRecord> holds = new ArrayList<>();
+      if (formatVersion >= 3) {
+        int holdCount = data.readInt();
+        for (int index = 0; index < holdCount; index++) holds.add(readHold(data));
+      }
       return new KeyHandoverState(
           requestId,
           version,
@@ -292,7 +301,89 @@ public final class SyntheticKeyHandoverAdapters {
           exceptionDecision,
           authorization,
           notification,
+          holds,
           readInstant(data));
+    }
+
+    private static void writeHold(DataOutputStream data, HoldRecord hold) throws IOException {
+      data.writeUTF(hold.holdId().value());
+      data.writeUTF(hold.requestId().value());
+      data.writeInt(hold.cycleNumber());
+      data.writeUTF(hold.policyReference().value());
+      data.writeUTF(hold.status().name());
+      data.writeUTF(hold.reason());
+      data.writeInt(hold.affectedBranches().size());
+      for (ClearanceBranch branch : hold.affectedBranches()) data.writeUTF(branch.name());
+      data.writeUTF(hold.owner().value());
+      data.writeUTF(hold.createdBy().value());
+      writeInstant(data, hold.startedAt());
+      writeInstant(data, hold.reviewAt());
+      writeInstant(data, hold.expiresAt());
+      data.writeInt(hold.extensionCount());
+      data.writeInt(hold.remediationByBranch().size());
+      for (BranchRemediation remediation : hold.remediationByBranch().values()) {
+        data.writeUTF(remediation.branch().name());
+        data.writeUTF(remediation.summary());
+        data.writeUTF(remediation.supportingReference().value());
+        data.writeUTF(remediation.recordedBy().value());
+        writeInstant(data, remediation.recordedAt());
+      }
+      data.writeInt(hold.stateVersion().value());
+      data.writeUTF(hold.correlationId().value());
+      data.writeUTF(hold.causationId().value());
+    }
+
+    private static HoldRecord readHold(DataInputStream data) throws IOException {
+      HoldId holdId = new HoldId(data.readUTF());
+      KeyHandoverRequestId requestId = new KeyHandoverRequestId(data.readUTF());
+      int cycle = data.readInt();
+      PolicyRef policyReference = new PolicyRef(data.readUTF());
+      HoldLifecycleStatus status = HoldLifecycleStatus.valueOf(data.readUTF());
+      String reason = data.readUTF();
+      Set<ClearanceBranch> branches = EnumSet.noneOf(ClearanceBranch.class);
+      int branchCount = data.readInt();
+      for (int index = 0; index < branchCount; index++)
+        branches.add(ClearanceBranch.valueOf(data.readUTF()));
+      com.sevenewf.workflow.domain.common.ActorId owner =
+          new com.sevenewf.workflow.domain.common.ActorId(data.readUTF());
+      com.sevenewf.workflow.domain.common.ActorId createdBy =
+          new com.sevenewf.workflow.domain.common.ActorId(data.readUTF());
+      Instant startedAt = readInstant(data);
+      Instant reviewAt = readInstant(data);
+      Instant expiresAt = readInstant(data);
+      int extensionCount = data.readInt();
+      Map<ClearanceBranch, BranchRemediation> remediations = new EnumMap<>(ClearanceBranch.class);
+      int remediationCount = data.readInt();
+      for (int index = 0; index < remediationCount; index++) {
+        ClearanceBranch branch = ClearanceBranch.valueOf(data.readUTF());
+        remediations.put(
+            branch,
+            new BranchRemediation(
+                branch,
+                data.readUTF(),
+                new EvidenceReference(data.readUTF()),
+                new com.sevenewf.workflow.domain.common.ActorId(data.readUTF()),
+                readInstant(data)));
+      }
+      return new HoldRecord(
+          holdId,
+          requestId,
+          cycle,
+          policyReference,
+          new LocalKeyHandoverHoldPolicy(),
+          status,
+          reason,
+          branches,
+          owner,
+          createdBy,
+          startedAt,
+          reviewAt,
+          expiresAt,
+          extensionCount,
+          remediations,
+          new DomainVersion(data.readInt()),
+          new CorrelationId(data.readUTF()),
+          new CausationId(data.readUTF()));
     }
 
     private static void writeBranch(DataOutputStream data, BranchState branch) throws IOException {
@@ -396,7 +487,8 @@ public final class SyntheticKeyHandoverAdapters {
       data.writeUTF(decision.causationId().value());
     }
 
-    private static ExceptionDecision readExceptionDecision(DataInputStream data) throws IOException {
+    private static ExceptionDecision readExceptionDecision(DataInputStream data)
+        throws IOException {
       return new ExceptionDecision(
           new com.sevenewf.workflow.domain.common.ActorId(data.readUTF()),
           new TeamOrRoleRef(data.readUTF()),
