@@ -2,16 +2,16 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
 Key Handover and Inspection have been implemented as focused vertical slices with
-dedicated runtime code. Product now needs a reusable, versioned, deterministic way
-to *describe* workflows such as Key Handover without coupling the description to a
-particular runtime implementation. This ADR proposes a generic workflow-definition
+dedicated runtime code. Product needs a reusable, versioned, deterministic way to
+*describe* workflows such as Key Handover without coupling the description to a
+particular runtime implementation. This ADR accepts a generic workflow-definition
 domain model that can be validated and serialized, but deliberately does not
-introduce execution, persistence, or design-time tooling yet.
+introduce execution, persistence, or design-time tooling.
 
 ## Decision
 
@@ -50,6 +50,38 @@ All policy, schema, timeout, and role references are identifiers only.
 - Definition equality and hash codes are deterministic because the model is composed
   of immutable value objects.
 
+### Explicit typed loop policies
+
+Cycles are not allowed by default. Every simple cycle in the transition graph must
+be covered by at least one explicit `LoopPolicy` attached to a transition within
+that cycle.
+
+`LoopPolicy` is a typed value object with:
+
+- `loopPolicyKey` — stable identifier;
+- `loopType` — `BOUNDED`, `CONDITION_CONTROLLED`, or `POLICY_CONTROLLED`;
+- `maxIterations` — required for `BOUNDED`, must be positive;
+- `exitConditionRef` — required for `CONDITION_CONTROLLED`;
+- `policyRef` — required for `POLICY_CONTROLLED`;
+- `timeoutPolicyRef` — optional for all types.
+
+A loop policy on one transition does not authorize a different cycle.
+
+### Explicit parallel gateway pairing
+
+`PARALLEL_SPLIT` and `PARALLEL_JOIN` activities share a nonblank `pairKey`. Within a
+definition, each pair key identifies exactly one split and exactly one join. Nested
+parallel pairs are allowed. Validation rejects:
+
+- missing pair keys;
+- unmatched splits or joins;
+- duplicate pair keys on splits or joins;
+- crossing or mismatched pairs;
+- branches from a split that cannot reach its paired join;
+- joins that combine branches from unrelated splits.
+
+Runtime token semantics are out of scope.
+
 ### Validation rules
 
 The structural validator rejects definitions with any `ERROR` or `CRITICAL` finding.
@@ -65,14 +97,17 @@ Implemented rules include:
 - unreachable activities;
 - terminal activities with outgoing transitions;
 - non-terminal activities without outgoing transitions;
+- cycles without an explicit loop policy on a transition in the cycle;
 - `PARALLEL_SPLIT` with fewer than two outgoing branches;
-- `PARALLEL_JOIN` with fewer than two incoming branches or no `PARALLEL_SPLIT` ancestry;
+- `PARALLEL_JOIN` with fewer than two incoming branches;
+- missing, unmatched, duplicate, or crossing parallel gateway pair keys;
+- `PARALLEL_JOIN` combining branches from unrelated splits;
+- branches from a split that cannot reach the paired join;
 - `DECISION` without named outcomes or with duplicate outcomes;
 - `HUMAN_TASK` without eligible role or allowed outcomes;
 - `CHILD_WORKFLOW` without correlation-key or business-key mapping;
 - `WAIT_EVENT` without event type;
 - `TIMER` without duration or duration policy reference;
-- cycles without an explicitly declared loop policy (metadata key `loopPolicy`);
 - conflicting transition priorities (same source, same outcome, same priority);
 - unsupported activity-type combinations (e.g., `END` as source, `START` as target,
   direct `PARALLEL_SPLIT` to `PARALLEL_JOIN`, `CHILD_WORKFLOW` with multiple branches,
@@ -82,7 +117,7 @@ Validation findings carry severity (`INFO`, `WARNING`, `ERROR`, `CRITICAL`), cod
 message, workflow key, and optional activity or transition references. Validation
 never mutates the definition.
 
-### Serialization safety
+### Serialization boundary
 
 - JSON uses stable field names and an explicit `"type"` discriminator for activities.
 - A round-trip serializer and deserializer are included in the domain model.
@@ -92,6 +127,13 @@ never mutates the definition.
 - No executable expressions are serialized.
 - Missing required configuration produces parse or validation errors rather than
   silent defaults.
+- The workflow-definition domain model remains framework-independent.
+- The current deterministic JSON codec is a temporary local canonical codec.
+- Future registry or runtime infrastructure may move serialization behind a
+  contracts or adapter boundary.
+- External JSON libraries must not leak polymorphic class names into the contract.
+- The canonical JSON schema and type discriminators remain stable regardless of
+  where the implementation is located.
 
 ### Relationship to Key Handover
 
@@ -113,6 +155,8 @@ message brokers, or persistence concerns.
 
 - Product gains a shared, versioned vocabulary for workflow definitions.
 - New workflow shapes can be described and validated before any runtime work begins.
+- Loop and parallel-gateway contracts are explicit and type-safe, removing the need
+  for metadata conventions.
 - The domain module remains free of external frameworks, preserving existing
   architecture-test invariants.
 - Manual JSON serialization requires ongoing maintenance if the model changes.
@@ -134,12 +178,14 @@ message brokers, or persistence concerns.
 
 ## Acceptance criteria
 
-This ADR is complete when implementation can demonstrate:
+This ADR is accepted when implementation can demonstrate:
 
 1. all required activity types and workflow fields are modeled;
 2. structural validation rejects every listed invalid case;
 3. valid definitions (linear, parallel, child, wait event, timer, simplified Key
    Handover) pass validation;
-4. JSON round-trips deterministically and rejects unknown activity types;
-5. published definitions are immutable and deterministic;
-6. existing Key Handover, Inspection, and frontend behavior remain unchanged.
+4. explicit loop policies authorize cycles only when correctly typed and placed;
+5. explicit gateway pair keys validate single/nested pairs and reject mismatches;
+6. JSON round-trips deterministically and rejects unknown activity types;
+7. published definitions are immutable and deterministic;
+8. existing Key Handover, Inspection, and frontend behavior remain unchanged.
