@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   inspectionApi,
+  InspectionHistoryEvent,
   InspectionProcess,
   InspectionSummary,
   InspectionTask,
@@ -41,6 +42,7 @@ export function App() {
   const [inspections, setInspections] = useState<InspectionSummary[]>([]);
   const [selectedInspectionId, setSelectedInspectionId] = useState("");
   const [inspectionDetail, setInspectionDetail] = useState<InspectionProcess | null>(null);
+  const [inspectionHistory, setInspectionHistory] = useState<InspectionHistoryEvent[]>([]);
 
   const selected = useMemo(
     () => requests.find((request) => request.requestNumber === selectedNumber) ?? requests[0],
@@ -85,8 +87,10 @@ export function App() {
     setSelectedInspectionId(id);
     try {
       setInspectionDetail(await inspectionApi.get(id));
+      setInspectionHistory(await inspectionApi.getHistory(id));
     } catch (e) {
       setInspectionDetail(null);
+      setInspectionHistory([]);
       setMessage(e instanceof Error ? e.message : "Failed to load inspection.");
     }
   };
@@ -96,6 +100,14 @@ export function App() {
       const updated = await fn();
       setInspectionDetail(updated);
       void loadInspections();
+      if (selectedInspectionId) {
+        try {
+          const history = await inspectionApi.getHistory(selectedInspectionId);
+          setInspectionHistory(history);
+        } catch {
+          setInspectionHistory([]);
+        }
+      }
       setMessage("");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Action failed.");
@@ -207,6 +219,7 @@ export function App() {
             inspections={inspections}
             selectedId={selectedInspectionId}
             detail={inspectionDetail}
+            history={inspectionHistory}
             busy={busy}
             identity={identity}
             onSelect={selectInspection}
@@ -891,6 +904,7 @@ function InspectionWorkspace({
   inspections,
   selectedId,
   detail,
+  history,
   busy,
   identity,
   onSelect,
@@ -899,6 +913,7 @@ function InspectionWorkspace({
   inspections: InspectionSummary[];
   selectedId: string;
   detail: InspectionProcess | null;
+  history: InspectionHistoryEvent[];
   busy: boolean;
   identity: DevelopmentIdentity;
   onSelect: (id: string) => void;
@@ -988,7 +1003,19 @@ function InspectionWorkspace({
             </div>
           </section>
         )}
-        <AuditTimelineInspection detail={detail} />
+        <AuditTimelineInspection history={history} />
+        {identity === "processOwner" && detail.status !== "COMPLETED" && detail.status !== "CANCELLED" && (
+          <button
+            disabled={busy}
+            onClick={() =>
+              onAction(() =>
+                inspectionApi.cancel(detail.id, identity, "Cancelled by process owner")
+              )
+            }
+          >
+            Cancel inspection
+          </button>
+        )}
       </section>
     </div>
   ) : (
@@ -1026,7 +1053,9 @@ function InspectionTaskCard({
   const open = task.status === "OPEN";
   const claimed = task.status === "CLAIMED";
   const isInspection = task.type === "INSPECTION";
-  const actor = identity; // use the selected development identity
+  const actor = identity;
+  const canDoInspection = identity === "inspectionOfficer";
+  const canDoRemediation = identity === "remediationOfficer";
   return (
     <article className="task-card">
       <div className="task-card-heading">
@@ -1036,7 +1065,7 @@ function InspectionTaskCard({
       <p className="task-id">{task.id}</p>
       {task.assignee && <p>Assignee: {task.assignee}</p>}
       {task.outcome && <p>Outcome: {task.outcome}</p>}
-      {open && isInspection && (
+      {open && isInspection && canDoInspection && (
         <button
           disabled={busy}
           onClick={() =>
@@ -1046,7 +1075,7 @@ function InspectionTaskCard({
           Claim inspection
         </button>
       )}
-      {open && !isInspection && (
+      {open && !isInspection && canDoRemediation && (
         <button
           disabled={busy}
           onClick={() =>
@@ -1058,7 +1087,7 @@ function InspectionTaskCard({
           Claim remediation
         </button>
       )}
-      {claimed && isInspection && (
+      {claimed && isInspection && canDoInspection && (
         <>
           <button
             disabled={busy}
@@ -1094,7 +1123,7 @@ function InspectionTaskCard({
           </button>
         </>
       )}
-      {claimed && !isInspection && (
+      {claimed && !isInspection && canDoRemediation && (
         <button
           disabled={busy}
           onClick={() =>
@@ -1112,23 +1141,17 @@ function InspectionTaskCard({
           Complete remediation
         </button>
       )}
+      {open && isInspection && !canDoInspection && (
+        <p className="form-hint">Only an Inspection Officer may claim this task.</p>
+      )}
+      {open && !isInspection && !canDoRemediation && (
+        <p className="form-hint">Only a Remediation Officer may claim this task.</p>
+      )}
     </article>
   );
 }
-function AuditTimelineInspection({ detail }: { detail: InspectionProcess }) {
+function AuditTimelineInspection({ history }: { history: InspectionHistoryEvent[] }) {
   const [expanded, setExpanded] = useState(true);
-  const events = [
-    ...detail.attempts.map((a) => ({
-      type: `Inspection ${a.result}`,
-      detail: a.findings,
-      time: a.completedAt,
-    })),
-    ...detail.remediationCycles.map((c) => ({
-      type: `Remediation ${c.status}`,
-      detail: c.resolutionSummary ?? "",
-      time: "",
-    })),
-  ];
   return (
     <section className="audit-panel" aria-labelledby="insp-audit-title">
       <div className="section-heading">
@@ -1137,7 +1160,7 @@ function AuditTimelineInspection({ detail }: { detail: InspectionProcess }) {
           <h2 id="insp-audit-title">Activity history</h2>
         </div>
         <div className="history-controls">
-          <span>{events.length} events</span>
+          <span>{history.length} events</span>
           <button
             className="quiet"
             aria-expanded={expanded}
@@ -1149,13 +1172,14 @@ function AuditTimelineInspection({ detail }: { detail: InspectionProcess }) {
       </div>
       {expanded && (
         <ol>
-          {events.reverse().map((e, i) => (
+          {history.map((e, i) => (
             <li key={i}>
               <span className="timeline-dot" />
               <div>
-                <strong>{e.type}</strong>
+                <strong>{e.eventType}</strong>
                 <p>{e.detail}</p>
-                {e.time && <small>{e.time}</small>}
+                {e.timestamp && <small>{e.timestamp}</small>}
+                {e.actor && e.actor !== "system" && <small> — Actor: {e.actor}</small>}
               </div>
             </li>
           ))}

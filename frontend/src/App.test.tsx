@@ -274,3 +274,137 @@ describe("Key Handover API demo", () => {
     ).toBeVisible();
   });
 });
+
+describe("Inspection workspace", () => {
+  const inspectionList = [
+    { id: "inspection-test", status: "REQUESTED", parentRequestId: "khr-test", propertyReference: "Test Property" }
+  ];
+
+  const inspectionDetail = (overrides: Record<string, unknown> = {}) => ({
+    id: "inspection-test",
+    businessKey: "Test Property|synthetic|khr-test",
+    parentRequestId: "khr-test",
+    propertyReference: "Test Property",
+    inspectionType: "synthetic",
+    status: "REQUESTED",
+    version: 1,
+    attempts: [],
+    remediationCycles: [],
+    tasks: [
+      {
+        id: "inspection-test-inspection-1",
+        type: "INSPECTION",
+        status: "OPEN",
+        requiredRole: "INSPECTION_OFFICER",
+        createdAt: "2026-06-20T10:00:00Z",
+        version: 1
+      }
+    ],
+    correlationId: "corr-test",
+    causationId: "cause-test",
+    updatedAt: "2026-06-20T10:00:00Z",
+    ...overrides
+  });
+
+  const remediationDetail = inspectionDetail({
+    status: "WAITING_FOR_REMEDIATION",
+    version: 3,
+    attempts: [
+      {
+        number: 1,
+        result: "FAILED",
+        findings: "Issues found",
+        evidenceReference: "evidence-failed",
+        completedAt: "2026-06-20T10:05:00Z"
+      }
+    ],
+    remediationCycles: [{ number: 1, status: "REQUIRED" }],
+    tasks: [
+      {
+        id: "inspection-test-inspection-1",
+        type: "INSPECTION",
+        status: "COMPLETED",
+        requiredRole: "INSPECTION_OFFICER",
+        createdAt: "2026-06-20T10:00:00Z",
+        completedAt: "2026-06-20T10:05:00Z",
+        outcome: "FAILED",
+        version: 2
+      },
+      {
+        id: "inspection-test-remediation-1",
+        type: "REMEDIATION",
+        status: "OPEN",
+        requiredRole: "REMEDIATION_OFFICER",
+        createdAt: "2026-06-20T10:06:00Z",
+        version: 1
+      }
+    ]
+  });
+
+  const mockFetch = (detail: unknown, history: unknown[] = []) => {
+    return vi.fn().mockImplementation((url: string) => {
+      if (url === "/api/key-handovers") {
+        return Promise.resolve({ ok: true, json: async () => [] });
+      }
+      if (url === "/api/inspections") {
+        return Promise.resolve({ ok: true, json: async () => ({ inspections: inspectionList }) });
+      }
+      if (url.includes("/inspections/") && url.includes("/history")) {
+        return Promise.resolve({ ok: true, json: async () => history });
+      }
+      if (url.includes("/api/inspections/")) {
+        return Promise.resolve({ ok: true, json: async () => detail });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+  };
+
+  it("hides inspection controls from Process Owner", async () => {
+    vi.stubGlobal("fetch", mockFetch(inspectionDetail()));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Inspections" }));
+    fireEvent.click(await screen.findByText("inspection-test"));
+    await screen.findByText("Tasks");
+    expect(screen.queryByRole("button", { name: "Claim inspection" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Complete PASSED" })).not.toBeInTheDocument();
+  });
+
+  it("shows inspection controls to Inspection Officer", async () => {
+    vi.stubGlobal("fetch", mockFetch(inspectionDetail()));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Inspections" }));
+    fireEvent.click(await screen.findByText("inspection-test"));
+    await screen.findByText("Tasks");
+    fireEvent.change(screen.getByLabelText("Testing as"), { target: { value: "inspectionOfficer" } });
+    expect(await screen.findByRole("button", { name: "Claim inspection" })).toBeVisible();
+  });
+
+  it("shows remediation controls only to Remediation Officer", async () => {
+    vi.stubGlobal("fetch", mockFetch(remediationDetail));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Inspections" }));
+    fireEvent.click(await screen.findByText("inspection-test"));
+    await screen.findByText("Remediation cycles");
+    expect(screen.queryByRole("button", { name: "Claim remediation" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Testing as"), { target: { value: "remediationOfficer" } });
+    expect(await screen.findByRole("button", { name: "Claim remediation" })).toBeVisible();
+  });
+
+  it("renders the full inspection audit history", async () => {
+    const history = [
+      { eventType: "InspectionRequested", actor: "system", timestamp: "2026-06-20T10:00:00Z", detail: "Process created" },
+      { eventType: "InspectionTaskCreated", actor: "system", timestamp: "2026-06-20T10:00:00Z", detail: "inspection-test-inspection-1" },
+      { eventType: "InspectionTaskClaimed", actor: "inspectionOfficer", timestamp: "2026-06-20T10:01:00Z", detail: "inspection-test-inspection-1" },
+      { eventType: "InspectionPassed", actor: "system", timestamp: "2026-06-20T10:02:00Z", detail: "All clear" },
+      { eventType: "ParentWorkflowResumeRequested", actor: "system", timestamp: "2026-06-20T10:02:00Z", detail: "Attempt 1" }
+    ];
+    vi.stubGlobal("fetch", mockFetch(inspectionDetail({ status: "COMPLETED" }), history));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Inspections" }));
+    fireEvent.click(await screen.findByText("inspection-test"));
+    await screen.findByText("Activity history");
+    for (const event of history) {
+      expect(await screen.findByText(event.eventType)).toBeVisible();
+    }
+  });
+});

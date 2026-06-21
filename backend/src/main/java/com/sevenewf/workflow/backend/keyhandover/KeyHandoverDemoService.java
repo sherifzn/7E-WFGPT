@@ -1,5 +1,6 @@
 package com.sevenewf.workflow.backend.keyhandover;
 
+import com.sevenewf.workflow.adapters.inspection.synthetic.InspectionPrerequisiteSatisfiedHandler;
 import com.sevenewf.workflow.adapters.inspection.synthetic.InspectionProcessAdapters;
 import com.sevenewf.workflow.adapters.keyhandover.synthetic.SyntheticKeyHandoverAdapters.PathBackedKeyHandoverStateStore;
 import com.sevenewf.workflow.domain.common.ActorId;
@@ -92,6 +93,14 @@ public final class KeyHandoverDemoService {
             policies);
     if (store.states().isEmpty()) seed();
     sequence = nextSequence();
+  }
+
+  public InspectionPrerequisiteSatisfiedHandler resumeHandler() {
+    if (!(inspectionStore
+        instanceof com.sevenewf.workflow.domain.inspection.InspectionPendingEventStore eventStore))
+      throw new IllegalStateException("Inspection store does not support pending resume events");
+    return new InspectionPrerequisiteSatisfiedHandler(
+        inspectionStore, eventStore, store, service, Instant::now);
   }
 
   public ApiResponse handle(String method, String path, Map<String, String> parameters) {

@@ -1,5 +1,6 @@
 package com.sevenewf.workflow.backend.keyhandover;
 
+import com.sevenewf.workflow.adapters.inspection.synthetic.InspectionPrerequisiteSatisfiedHandler;
 import com.sevenewf.workflow.domain.inspection.InspectionProcessStore;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -20,6 +21,10 @@ public final class KeyHandoverDemoHttpHandler implements HttpHandler {
 
   public KeyHandoverDemoHttpHandler(Path dataDirectory, InspectionProcessStore inspectionStore) {
     service = new KeyHandoverDemoService(dataDirectory, inspectionStore);
+  }
+
+  public InspectionPrerequisiteSatisfiedHandler resumeHandler() {
+    return service.resumeHandler();
   }
 
   @Override

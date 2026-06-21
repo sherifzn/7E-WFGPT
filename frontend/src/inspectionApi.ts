@@ -69,12 +69,10 @@ export interface InspectionSummary {
 }
 
 export interface InspectionHistoryEvent {
-  type: string;
-  number: number;
-  result?: string;
-  findings?: string;
-  status?: string;
-  completedAt?: string;
+  eventType: string;
+  actor: string;
+  timestamp: string;
+  detail: string;
 }
 
 const baseUrl = "/api/inspections";
