@@ -22,6 +22,7 @@ const request = (overrides: Record<string, unknown> = {}) => ({
     { id: "legal", title: "Legal clearance", status: "Blocked", assignedTo: "", outcome: "" }
   ],
   audit: [],
+  hold: null,
   ...overrides
 });
 
@@ -158,5 +159,69 @@ describe("Key Handover API demo", () => {
         expect(element).toHaveAttribute("aria-disabled", "true");
       });
     }
+  });
+
+  it("shows hold details read-only, then exposes Process Owner controls and updates remediation", async () => {
+    const hold = {
+      id: "hold-101",
+      cycleNumber: 1,
+      policyVersion: "key-handover-hold-policy-v1-local",
+      status: "Active",
+      owner: "synthetic-process-owner",
+      reason: "Legal clearance returned RED",
+      affectedBranches: ["LEGAL"],
+      startedAt: "2026-06-20T10:00:00Z",
+      reviewAt: "2026-06-24T10:00:00Z",
+      expiresAt: "2026-06-30T10:00:00Z",
+      extensionCount: 0,
+      remediations: []
+    };
+    const held = request({ status: "On hold", finalDecision: "On hold", hold, stateVersion: 8 });
+    const remediated = request({
+      ...held,
+      stateVersion: 9,
+      hold: {
+        ...hold,
+        status: "Resolution recorded",
+        remediations: [
+          {
+            branch: "LEGAL",
+            summary: "Resolved",
+            supportingReference: "ref-1",
+            recordedBy: "synthetic-process-owner",
+            recordedAt: "2026-06-20T11:00:00Z"
+          }
+        ]
+      },
+      audit: [
+        {
+          id: "hold-resolution",
+          actor: "owner",
+          eventType: "HoldResolutionRecorded",
+          timestamp: "2026-06-20T11:00:00Z",
+          correlationId: "corr",
+          causationId: "cause"
+        }
+      ]
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => [held] })
+      .mockResolvedValueOnce({ ok: true, json: async () => remediated });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    expect(await screen.findByText("Hold cycle 1")).toBeVisible();
+    expect(screen.getByText("Hold information is read-only for this role.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Resume workflow" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Testing as"), { target: { value: "processOwner" } });
+    fireEvent.change(screen.getByLabelText("Affected branch"), { target: { value: "LEGAL" } });
+    fireEvent.change(screen.getByLabelText("Remediation summary"), {
+      target: { value: "Resolved" }
+    });
+    fireEvent.change(screen.getByLabelText("Supporting reference"), { target: { value: "ref-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Record resolution" }));
+    await waitFor(() => expect(screen.getByText("Resolved: Resolved")).toBeVisible());
+    expect(screen.getByRole("button", { name: "Resume workflow" })).toBeEnabled();
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/KH-101/hold/remediation");
   });
 });

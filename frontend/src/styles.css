@@ -399,6 +399,76 @@ h3 {
   border-radius: 13px;
   background: #fff;
 }
+.hold-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #f0c8c8;
+  border-radius: 13px;
+  background: #fffafa;
+}
+.hold-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+.hold-details div,
+.remediation-list,
+.hold-form {
+  padding: 11px;
+  border: 1px solid #f0dddd;
+  border-radius: 9px;
+  background: #fff;
+}
+.hold-details dt {
+  color: #71839b;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.hold-details dd {
+  margin: 4px 0 0;
+  color: #314967;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+.remediation-list {
+  display: grid;
+  gap: 7px;
+}
+.remediation-list p {
+  margin: 0;
+  color: #526780;
+  font-size: 0.84rem;
+}
+.hold-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.hold-form,
+.hold-terminal-actions {
+  display: grid;
+  gap: 8px;
+}
+.hold-form h3 {
+  margin: 0;
+}
+.hold-form input,
+.hold-form select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #bfcede;
+  border-radius: 7px;
+}
+.hold-terminal-actions {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, max-content);
+}
+.hold-read-only {
+  margin: 0;
+  color: #647993;
+}
 .exception-decision-panel label {
   display: grid;
   gap: 6px;
@@ -552,6 +622,14 @@ h3 {
   }
   .summary-grid {
     grid-template-columns: 1fr;
+  }
+  .hold-details,
+  .hold-actions,
+  .hold-terminal-actions {
+    grid-template-columns: 1fr;
+  }
+  .hold-terminal-actions {
+    grid-column: auto;
   }
   .topbar,
   .detail-heading,

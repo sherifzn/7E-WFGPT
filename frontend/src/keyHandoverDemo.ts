@@ -5,6 +5,8 @@ export type RequestStatus =
   | "Exception approval required"
   | "Exception rejected"
   | "On hold"
+  | "Hold rejected"
+  | "Cancelled"
   | "Notification failed";
 export type Outcome = "GREEN" | "AMBER" | "RED";
 export type TaskStatus = "Blocked" | "Open" | "Claimed" | "Completed";
@@ -32,6 +34,27 @@ export interface ClearanceTask {
   assignedTo: string;
   outcome: Outcome | "";
 }
+export interface HoldRemediation {
+  branch: "HANDOVER" | "FINANCE" | "LEGAL";
+  summary: string;
+  supportingReference: string;
+  recordedBy: string;
+  recordedAt: string;
+}
+export interface HoldDetails {
+  id: string;
+  cycleNumber: number;
+  policyVersion: string;
+  status: string;
+  owner: string;
+  reason: string;
+  affectedBranches: ("HANDOVER" | "FINANCE" | "LEGAL")[];
+  startedAt: string;
+  reviewAt: string;
+  expiresAt: string;
+  extensionCount: number;
+  remediations: HoldRemediation[];
+}
 export interface KeyHandoverRequest {
   requestNumber: string;
   property: string;
@@ -47,6 +70,7 @@ export interface KeyHandoverRequest {
   lastUpdated: string;
   tasks: ClearanceTask[];
   audit: AuditEvent[];
+  hold: HoldDetails | null;
 }
 
 const baseUrl = import.meta.env.VITE_KEY_HANDOVER_API_URL ?? "/api/key-handovers";
@@ -84,5 +108,7 @@ export const keyHandoverApi = {
       body: new URLSearchParams(parameters).toString()
     }),
   audit: (requestNumber: string) =>
-    request<AuditEvent[]>(`/${encodeURIComponent(requestNumber)}/audit`)
+    request<AuditEvent[]>(`/${encodeURIComponent(requestNumber)}/audit`),
+  hold: (requestNumber: string) =>
+    request<HoldDetails>(`/${encodeURIComponent(requestNumber)}/hold`)
 };

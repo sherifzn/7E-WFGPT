@@ -218,4 +218,76 @@ final class KeyHandoverDemoServiceTest {
                 Map.of("outcome", "GREEN", "actor", "handoverOfficer"))
             .status());
   }
+
+  @Test
+  void exposesAndManagesHoldThroughLocalApi(@TempDir Path temporaryDirectory) {
+    KeyHandoverDemoService service = new KeyHandoverDemoService(temporaryDirectory);
+    KeyHandoverDemoService.ApiResponse held = completeToHold(service, "KH-102");
+    int holdVersion = stateVersion(held.body());
+
+    assertEquals(200, service.handle("GET", "/KH-102/hold", Map.of()).status());
+    assertEquals(
+        403,
+        service
+            .handle(
+                "POST",
+                "/KH-102/hold/remediation",
+                Map.of(
+                    "actor", "legalOfficer",
+                    "branch", "LEGAL",
+                    "summary", "Resolved",
+                    "supportingReference", "ref-1",
+                    "expectedStateVersion", String.valueOf(holdVersion)))
+            .status());
+    assertEquals(
+        409,
+        service
+            .handle(
+                "POST",
+                "/KH-102/hold/resume",
+                Map.of("actor", "processOwner", "expectedStateVersion", String.valueOf(holdVersion)))
+            .status());
+    KeyHandoverDemoService.ApiResponse remediated =
+        service.handle(
+            "POST",
+            "/KH-102/hold/remediation",
+            Map.of(
+                "actor", "processOwner",
+                "branch", "LEGAL",
+                "summary", "Resolved",
+                "supportingReference", "ref-1",
+                "expectedStateVersion", String.valueOf(holdVersion)));
+    assertEquals(200, remediated.status());
+    KeyHandoverDemoService.ApiResponse resumed =
+        service.handle(
+            "POST",
+            "/KH-102/hold/resume",
+            Map.of(
+                "actor", "processOwner",
+                "expectedStateVersion", String.valueOf(stateVersion(remediated.body()))));
+    assertEquals(200, resumed.status());
+    assertTrue(resumed.body().contains("Clearance in progress"));
+    assertTrue(resumed.body().contains("HoldResumed"));
+
+    KeyHandoverDemoService restarted = new KeyHandoverDemoService(temporaryDirectory);
+    assertTrue(restarted.handle("GET", "/KH-102/audit", Map.of()).body().contains("HoldResolutionRecorded"));
+  }
+
+  private static KeyHandoverDemoService.ApiResponse completeToHold(
+      KeyHandoverDemoService service, String requestNumber) {
+    service.handle(
+        "POST", "/" + requestNumber + "/tasks/handover/claim", Map.of("actor", "handoverOfficer"));
+    service.handle(
+        "POST",
+        "/" + requestNumber + "/tasks/handover/complete",
+        Map.of("outcome", "GREEN", "actor", "handoverOfficer"));
+    service.handle(
+        "POST", "/" + requestNumber + "/tasks/finance/complete", Map.of("actor", "financeOfficer"));
+    service.handle(
+        "POST", "/" + requestNumber + "/tasks/legal/claim", Map.of("actor", "legalOfficer"));
+    return service.handle(
+        "POST",
+        "/" + requestNumber + "/tasks/legal/complete",
+        Map.of("outcome", "RED", "actor", "legalOfficer"));
+  }
 }

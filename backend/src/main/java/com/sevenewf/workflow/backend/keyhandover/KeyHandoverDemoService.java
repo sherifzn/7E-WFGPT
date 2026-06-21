@@ -4,6 +4,7 @@ import com.sevenewf.workflow.adapters.keyhandover.synthetic.SyntheticKeyHandover
 import com.sevenewf.workflow.domain.common.ActorId;
 import com.sevenewf.workflow.domain.common.CausationId;
 import com.sevenewf.workflow.domain.common.CorrelationId;
+import com.sevenewf.workflow.domain.common.DomainVersion;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverApplicationService;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.AuthorizationDeniedException;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.ConflictingDuplicateCompletionException;
@@ -13,6 +14,9 @@ import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.Validation
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverPorts.*;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverState;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.*;
+import com.sevenewf.workflow.domain.keyhandover.hold.BusinessDays;
+import com.sevenewf.workflow.domain.keyhandover.hold.BranchRemediation;
+import com.sevenewf.workflow.domain.keyhandover.hold.HoldRecord;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -72,6 +76,8 @@ public final class KeyHandoverDemoService {
       if ("GET".equals(method) && parts.length == 1) return ok(requestJson(state));
       if ("GET".equals(method) && parts.length == 2 && "audit".equals(parts[1]))
         return ok(auditJson(state));
+      if ("GET".equals(method) && parts.length == 2 && "hold".equals(parts[1]))
+        return ok(holdJson(state));
       if (!"POST".equals(method)) return notFound();
       return ok(requestJson(action(state, Arrays.copyOfRange(parts, 1, parts.length), parameters)));
     } catch (SecurityException | AuthorizationDeniedException exception) {
@@ -82,7 +88,7 @@ public final class KeyHandoverDemoService {
       return new ApiResponse(409, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
     } catch (ValidationFailedException exception) {
       if ("Unknown key handover request".equals(exception.getMessage())) return notFound();
-      return new ApiResponse(400, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
+      return new ApiResponse(409, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
     } catch (RuntimeException exception) {
       return new ApiResponse(400, "{\"error\":\"" + escape(exception.getMessage()) + "\"}");
     }
@@ -124,6 +130,55 @@ public final class KeyHandoverDemoService {
           state.stateVersion(),
           correlation(number),
           causation(number, "retry"));
+    if (matches(action, "hold", "remediation"))
+      return service.recordHoldRemediation(
+          state.requestId(),
+          branch(required(parameters, "branch")),
+          required(parameters, "summary"),
+          new EvidenceReference(required(parameters, "supportingReference")),
+          actor(parameters),
+          expectedVersion(parameters, state),
+          correlation(parameters, number),
+          causation(parameters, number, "hold-remediation"));
+    if (matches(action, "hold", "extend")) {
+      required(parameters, "reason");
+      required(parameters, "reviewAt");
+      required(parameters, "expiresAt");
+      return service.extendHold(
+          state.requestId(),
+          new BusinessDays(integer(parameters, "extensionBusinessDays")),
+          actor(parameters),
+          expectedVersion(parameters, state),
+          correlation(parameters, number),
+          causation(parameters, number, "hold-extend"));
+    }
+    if (matches(action, "hold", "resume"))
+      return service.resumeHold(
+          state.requestId(),
+          actor(parameters),
+          expectedVersion(parameters, state),
+          correlation(parameters, number),
+          causation(parameters, number, "hold-resume"));
+    if (matches(action, "hold", "reject"))
+      return service.rejectHold(
+          state.requestId(),
+          actor(parameters),
+          expectedVersion(parameters, state),
+          correlation(parameters, number),
+          causation(parameters, number, "hold-reject"));
+    if (matches(action, "hold", "cancel"))
+      return service.cancelHold(
+          state.requestId(),
+          actor(parameters),
+          expectedVersion(parameters, state),
+          correlation(parameters, number),
+          causation(parameters, number, "hold-cancel"));
+    if (matches(action, "hold", "evaluate"))
+      return service.evaluateHold(
+          state.requestId(),
+          actor(parameters),
+          correlation(parameters, number),
+          causation(parameters, number, "hold-evaluate"));
     if (matches(action, "exception", "approve") || matches(action, "exception", "reject"))
       return service.decideException(
           new ExceptionDecisionCommand(
@@ -333,6 +388,69 @@ public final class KeyHandoverDemoService {
         + tasksJson(state)
         + ",\"audit\":"
         + auditJson(state)
+        + ",\"hold\":"
+        + holdJsonOrNull(state)
+        + "}";
+  }
+
+  private String holdJson(KeyHandoverState state) {
+    String hold = holdJsonOrNull(state);
+    if ("null".equals(hold)) throw new ValidationFailedException("No active hold exists");
+    return hold;
+  }
+
+  private static String holdJsonOrNull(KeyHandoverState state) {
+    Optional<HoldRecord> hold = state.holds().stream().reduce((first, second) -> second);
+    if (hold.isEmpty()) return "null";
+    HoldRecord current = hold.orElseThrow();
+    String remediations =
+        current.remediationByBranch().values().stream()
+            .map(KeyHandoverDemoService::remediationJson)
+            .collect(java.util.stream.Collectors.joining(","));
+    String affected =
+        current.affectedBranches().stream()
+            .map(ClearanceBranch::name)
+            .map(value -> "\"" + escape(value) + "\"")
+            .collect(java.util.stream.Collectors.joining(","));
+    return "{"
+        + field("id", current.holdId().value())
+        + ",\"cycleNumber\":"
+        + current.cycleNumber()
+        + ","
+        + field("policyVersion", current.policyReference().value())
+        + ","
+        + field("status", label(current.status()))
+        + ","
+        + field("owner", current.owner().value())
+        + ","
+        + field("reason", current.reason())
+        + ",\"affectedBranches\":["
+        + affected
+        + "]"
+        + ","
+        + field("startedAt", current.startedAt().toString())
+        + ","
+        + field("reviewAt", current.reviewAt().toString())
+        + ","
+        + field("expiresAt", current.expiresAt().toString())
+        + ",\"extensionCount\":"
+        + current.extensionCount()
+        + ",\"remediations\":["
+        + remediations
+        + "]}";
+  }
+
+  private static String remediationJson(BranchRemediation remediation) {
+    return "{"
+        + field("branch", remediation.branch().name())
+        + ","
+        + field("summary", remediation.summary())
+        + ","
+        + field("supportingReference", remediation.supportingReference().value())
+        + ","
+        + field("recordedBy", remediation.recordedBy().value())
+        + ","
+        + field("recordedAt", remediation.recordedAt().toString())
         + "}";
   }
 
@@ -540,6 +658,7 @@ public final class KeyHandoverDemoService {
             Permission.EMERGENCY_REASSIGN,
             Permission.RETRY_NOTIFICATION,
             Permission.DECIDE_EXCEPTION,
+            Permission.MANAGE_HOLD,
             Permission.VIEW_TASK),
         Set.of(),
         "process-owner-role");
@@ -584,6 +703,12 @@ public final class KeyHandoverDemoService {
     } catch (NumberFormatException exception) {
       throw new IllegalArgumentException(name + " must be a number");
     }
+  }
+
+  private static DomainVersion expectedVersion(
+      Map<String, String> values, KeyHandoverState state) {
+    String value = values.get("expectedStateVersion");
+    return new DomainVersion(value == null || value.isBlank() ? state.stateVersion().value() : integer(values, "expectedStateVersion"));
   }
 
   private int nextSequence() {

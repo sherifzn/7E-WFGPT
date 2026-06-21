@@ -368,7 +368,200 @@ function RequestDetail({
         busy={busy}
         onUpdate={onUpdate}
       />
+      <HoldManagementPanel request={request} identity={identity} busy={busy} onAction={onAction} />
       <AuditTimeline request={request} />
+    </section>
+  );
+}
+function HoldManagementPanel({
+  request,
+  identity,
+  busy,
+  onAction
+}: {
+  request: KeyHandoverRequest;
+  identity: DevelopmentIdentity;
+  busy: boolean;
+  onAction: (path: string, parameters?: Record<string, string>) => Promise<void>;
+}) {
+  const [branch, setBranch] = useState("");
+  const [summary, setSummary] = useState("");
+  const [reference, setReference] = useState("");
+  const [extensionDays, setExtensionDays] = useState("5");
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const hold = request.hold;
+  const canManage = identity === "processOwner" && request.status === "On hold";
+  if (!hold) return null;
+  const remediated = new Set(hold.remediations.map((item) => item.branch));
+  const allResolved = hold.affectedBranches.every((item) => remediated.has(item));
+  const act = async (path: string, parameters: Record<string, string> = {}) => {
+    try {
+      await onAction(path, {
+        ...parameters,
+        expectedStateVersion: String(request.stateVersion),
+        correlationId: `corr-${request.requestNumber}-hold`,
+        causationId: `cause-${request.requestNumber}-${path.replaceAll("/", "-")}`
+      });
+      setMessage("");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "The hold action could not be completed."
+      );
+    }
+  };
+  const recordResolution = () => {
+    if (!branch || !summary.trim() || !reference.trim()) {
+      setMessage("Select an affected branch and provide a summary and supporting reference.");
+      return;
+    }
+    void act("hold/remediation", {
+      branch,
+      summary: summary.trim(),
+      supportingReference: reference.trim()
+    });
+  };
+  const extend = () => {
+    if (!reason.trim()) {
+      setMessage("An extension reason is required.");
+      return;
+    }
+    void act("hold/extend", {
+      extensionBusinessDays: extensionDays,
+      reason: reason.trim(),
+      reviewAt: hold.reviewAt,
+      expiresAt: hold.expiresAt
+    });
+  };
+  return (
+    <section className="hold-panel" aria-labelledby="hold-title">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Hold management</p>
+          <h2 id="hold-title">Hold cycle {hold.cycleNumber}</h2>
+        </div>
+        <span className={`status ${statusClass(hold.status)}`}>{hold.status}</span>
+      </div>
+      <dl className="hold-details">
+        <div>
+          <dt>Policy</dt>
+          <dd>{hold.policyVersion}</dd>
+        </div>
+        <div>
+          <dt>Owner</dt>
+          <dd>{hold.owner}</dd>
+        </div>
+        <div>
+          <dt>Reason</dt>
+          <dd>{hold.reason}</dd>
+        </div>
+        <div>
+          <dt>Started</dt>
+          <dd>{hold.startedAt}</dd>
+        </div>
+        <div>
+          <dt>Review</dt>
+          <dd>{hold.reviewAt}</dd>
+        </div>
+        <div>
+          <dt>Expiry</dt>
+          <dd>{hold.expiresAt}</dd>
+        </div>
+        <div>
+          <dt>Extensions</dt>
+          <dd>{hold.extensionCount}</dd>
+        </div>
+      </dl>
+      <div className="remediation-list" aria-label="Affected branch remediation status">
+        {hold.affectedBranches.map((affectedBranch) => {
+          const remediation = hold.remediations.find((item) => item.branch === affectedBranch);
+          return (
+            <p key={affectedBranch}>
+              <strong>{affectedBranch}</strong>{" "}
+              {remediation ? `Resolved: ${remediation.summary}` : "Resolution required"}
+            </p>
+          );
+        })}
+      </div>
+      {canManage ? (
+        <div className="hold-actions">
+          <div className="hold-form">
+            <h3>Record resolution</h3>
+            <select
+              aria-label="Affected branch"
+              value={branch}
+              onChange={(event) => setBranch(event.target.value)}
+            >
+              <option value="">Select branch</option>
+              {hold.affectedBranches.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+            <input
+              aria-label="Remediation summary"
+              value={summary}
+              onChange={(event) => setSummary(event.target.value)}
+              placeholder="Resolution summary"
+            />
+            <input
+              aria-label="Supporting reference"
+              value={reference}
+              onChange={(event) => setReference(event.target.value)}
+              placeholder="Supporting reference"
+            />
+            <button className="secondary" disabled={busy} onClick={recordResolution}>
+              Record resolution
+            </button>
+          </div>
+          <div className="hold-form">
+            <h3>Extend hold</h3>
+            <input
+              aria-label="Extension business days"
+              type="number"
+              min="1"
+              max="5"
+              value={extensionDays}
+              onChange={(event) => setExtensionDays(event.target.value)}
+            />
+            <input
+              aria-label="Extension reason"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="Extension reason"
+            />
+            <button className="secondary" disabled={busy} onClick={extend}>
+              Extend hold
+            </button>
+          </div>
+          <div className="hold-terminal-actions">
+            <button
+              className="primary"
+              disabled={busy || !allResolved}
+              onClick={() => void act("hold/resume")}
+            >
+              Resume workflow
+            </button>
+            <button className="secondary" disabled={busy} onClick={() => void act("hold/reject")}>
+              Reject case
+            </button>
+            <button className="quiet" disabled={busy} onClick={() => void act("hold/cancel")}>
+              Cancel case
+            </button>
+            <button className="quiet" disabled={busy} onClick={() => void act("hold/evaluate")}>
+              Evaluate hold timing
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="hold-read-only">Hold information is read-only for this role.</p>
+      )}
+      {message && (
+        <p className="form-message" role="alert">
+          {message}
+        </p>
+      )}
     </section>
   );
 }
