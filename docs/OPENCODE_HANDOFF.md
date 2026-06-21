@@ -12,13 +12,13 @@ Current local branch:
 
 Latest local commit:
 
-`8dbbe94 feat(inspection): add inspection application service`
+`ca78247 fix(inspection): enforce task roles and complete audit history`
 
 Last confirmed remote commit:
 
 `93397ab feat(key-handover): add activity history controls and notification recovery testing`
 
-The local branch may therefore be ahead of GitHub.
+The local branch is 11 commits ahead of GitHub.
 
 ## Critical first action
 
@@ -32,13 +32,6 @@ git diff --cached
 ```
 
 Do not reset, clean, stash, or discard files.
-
-There may be uncommitted work in:
-
-* `architecture/adr-020-inspection-remediation-runtime-contract.md`
-* `domain/src/main/java/com/sevenewf/workflow/domain/inspection/InspectionProcess.java`
-
-Preserve and inspect these files before continuing.
 
 ## Development operating model
 
@@ -120,31 +113,41 @@ Important commits include:
 * `f1a1466` API and UI hold management
 * `e971102` legacy hold initialization
 * `93397ab` Activity History controls and notification recovery
-* `8dbbe94` Inspection application service
 
-## Accepted hold policy
+## Completed milestone: Inspection Request and Remediation
 
-Policy:
+The Inspection vertical slice is complete and validated. It supports:
 
-`key-handover-hold-policy-v1-local`
+* ADR-020 accepted
+* durable `InspectionProcess` aggregate
+* `InspectionApplicationService`
+* local snapshot persistence with optimistic versioning
+* pending parent-resume event persistence and recovery
+* automatic parent Key Handover resume via `InspectionPrerequisiteSatisfiedHandler`
+* Finance and Legal branch preservation on parent resume
+* Inspection HTTP API (`/api/inspections`)
+* Inspection frontend workspace
+* inspection/reinspection role enforcement for Inspection Officer
+* remediation role enforcement for Remediation Officer
+* Process Owner cancel authorization
+* durable inspection audit history
+* remediation and reinspection flow
+* manual and restart-recovery browser acceptance
 
-Rules:
+Important commits in order:
 
-* Process Owner manages holds.
-* Team Head has read-only visibility.
-* Branch officers act only on their remediation work.
-* Review occurs after 2 business days.
-* Initial maximum hold duration is 10 business days.
-* Maximum 2 extensions.
-* Each extension is 5 business days.
-* Every RED branch requires remediation.
-* Resume only RED branches.
-* Preserve GREEN and AMBER branch outcomes.
-* Expired holds cannot resume directly; extension is required first.
-* Reject and cancel are terminal.
-* No authorization or success notification while held.
+* `1cfb485` local snapshot persistence
+* `1a8e615` durable inspection aggregate contract (ADR-020)
+* `8dbbe94` inspection application service
+* `a56d591` parent handover resume handler
+* `2c3951c` preserve clearance branches on parent resume
+* `1e6895a` complete inspection remediation workflow
+* `7189cef` create and display inspection from handover request
+* `8ea674f` complete handover child-process integration
+* `eb5922e` initialize Finance and Legal before inspection
+* `ca78247` enforce task roles and complete audit history
 
-## Inspection architecture decision
+### Inspection architecture decision
 
 ADR:
 
@@ -198,16 +201,14 @@ Migration direction:
 * Preserve the existing opaque connector behavior during transition.
 * Do not migrate existing Key Handover snapshots.
 
-## Inspection work already completed
+### Inspection role model
 
-The inspection domain currently includes or is expected to include:
+* **Inspection Officer**: claim and complete initial inspection and reinspection work.
+* **Remediation Officer**: claim and complete remediation work.
+* **Process Owner**: cancel active inspection processes, retry transient parent-resume failures, view process and history.
+* Backend authorization is authoritative; frontend controls reflect the selected identity.
 
-* `InspectionProcess`
-* `InspectionApplicationService`
-* `InspectionCommandMetadata`
-* `InspectionProcessStore`
-* `InspectionApplicationExceptions`
-* `InspectionApplicationServiceTest`
+### Inspection commands
 
 Implemented application commands:
 
@@ -221,48 +222,62 @@ Implemented application commands:
 * complete reinspection
 * cancel active inspection process
 
-Implemented role rules:
-
-* Inspection Officer claims and completes inspection or reinspection work.
-* Remediation Officer claims and completes remediation work.
-* Process Owner cancels active inspection processes.
-
 Implemented command behavior:
 
 * equivalent terminal repeats return existing state
 * conflicting repeats are rejected
 * stale expected versions are rejected
+* unauthorized roles receive 403 and are audited
 
-Latest focused validation:
+### Inspection audit history
+
+The inspection detail history displays persisted lifecycle events in chronological order:
+
+* InspectionRequested
+* InspectionTaskCreated
+* InspectionTaskClaimed
+* InspectionCompleted
+* InspectionPassed / InspectionFailed
+* RemediationRequired
+* RemediationTaskCreated
+* RemediationTaskClaimed
+* RemediationCompleted
+* ReinspectionRequested
+* ReinspectionTaskCreated
+* ParentWorkflowResumeRequested
+* ParentWorkflowResumed
+* InspectionCancelled
+* UnauthorizedActionRejected
+* ParentResumeFailed, where applicable
+
+## Latest focused validation
 
 ```text
-mvn -pl domain test
-42 tests passed
+mvn test
+120 tests passed
 0 failures
+```
+
+```text
+npx vitest run
+13 tests passed
+0 failures
+```
+
+```text
+npm run lint
+0 warnings
+0 errors
+```
+
+```text
+npm run build
+Production build succeeded
 ```
 
 ## Next development slice
 
-Implement only:
-
-# Inspection persistence and restart recovery
-
-Do not implement API or frontend in the same slice.
-
-Required work:
-
-1. Local inspection snapshot adapter
-2. Save and load full Inspection Process aggregate
-3. Persist attempts, remediation cycles, fixed tasks, audits, and aggregate version
-4. Optimistic concurrency
-5. Atomic snapshot replacement
-6. Restart recovery
-7. Pending parent-resume event persistence
-8. Focused adapter and domain tests
-
-After that, implement the parent Key Handover resume handler as a separate small slice.
-
-Then implement API and frontend as separate later slices.
+No active slice is defined. The Inspection Request and Remediation milestone is complete. Await product approval before pushing to GitHub.
 
 ## Explicitly deferred
 
