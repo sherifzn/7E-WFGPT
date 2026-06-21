@@ -47,7 +47,8 @@ describe("Key Handover API demo", () => {
     render(<App />);
     expect(await screen.findByText("Inspection barrier active")).toBeVisible();
     expect(screen.getAllByRole("button", { name: "Claim task" })[0]).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Resume after inspection" }));
+    fireEvent.change(screen.getByLabelText("Testing as"), { target: { value: "processOwner" } });
+    fireEvent.click(screen.getByRole("button", { name: "Resume after inspection (recovery)" }));
     await waitFor(() =>
       expect(screen.queryByText("Inspection barrier active")).not.toBeInTheDocument()
     );

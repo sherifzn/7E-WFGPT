@@ -27,11 +27,20 @@ public final class InspectionDemoService {
   private final Path dataDirectory;
 
   public InspectionDemoService(Path dataDirectory) {
+    this(dataDirectory, null);
+  }
+
+  public InspectionDemoService(Path dataDirectory, InspectionProcessStore sharedStore) {
     this.dataDirectory = dataDirectory.toAbsolutePath().normalize();
-    this.store =
-        new com.sevenewf.workflow.adapters.inspection.synthetic.InspectionProcessAdapters
-            .InspectionProcessSnapshotStore(dataDirectory.resolve("inspection-state.bin"));
-    this.eventStore = (InspectionPendingEventStore) store;
+    if (sharedStore != null) {
+      this.store = sharedStore;
+    } else {
+      this.store =
+          new com.sevenewf.workflow.adapters.inspection.synthetic.InspectionProcessAdapters
+              .InspectionProcessSnapshotStore(dataDirectory.resolve("inspection-state.bin"));
+    }
+    this.eventStore =
+        (store instanceof InspectionPendingEventStore) ? (InspectionPendingEventStore) store : null;
     this.appService = new InspectionApplicationService(store);
   }
 

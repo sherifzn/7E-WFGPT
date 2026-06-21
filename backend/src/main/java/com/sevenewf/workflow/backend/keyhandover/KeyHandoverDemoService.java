@@ -8,6 +8,7 @@ import com.sevenewf.workflow.domain.common.CorrelationId;
 import com.sevenewf.workflow.domain.common.DomainVersion;
 import com.sevenewf.workflow.domain.inspection.InspectionApplicationService;
 import com.sevenewf.workflow.domain.inspection.InspectionProcess;
+import com.sevenewf.workflow.domain.inspection.InspectionProcess.InspectionBusinessKey;
 import com.sevenewf.workflow.domain.inspection.InspectionProcessStore;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverApplicationService;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.AuthorizationDeniedException;
@@ -46,18 +47,29 @@ public final class KeyHandoverDemoService {
   }
 
   public KeyHandoverDemoService(Path dataDirectory) {
-    this(dataDirectory, true);
+    this(dataDirectory, (InspectionProcessStore) null);
+  }
+
+  KeyHandoverDemoService(Path dataDirectory, InspectionProcessStore inspectionStore) {
+    this(dataDirectory, true, inspectionStore);
   }
 
   KeyHandoverDemoService(Path dataDirectory, boolean localDevelopmentMode) {
+    this(dataDirectory, localDevelopmentMode, null);
+  }
+
+  KeyHandoverDemoService(
+      Path dataDirectory, boolean localDevelopmentMode, InspectionProcessStore inspectionStore) {
     this.dataDirectory = dataDirectory;
     this.localDevelopmentMode = localDevelopmentMode;
     store = new PathBackedKeyHandoverStateStore(dataDirectory.resolve("key-handover-state.bin"));
     audits = new PersistentDemoAuditSink(dataDirectory.resolve("audit-events.tsv"));
-    inspectionStore =
-        new InspectionProcessAdapters.InspectionProcessSnapshotStore(
-            dataDirectory.resolve("inspection-state.bin"));
-    inspectionService = new InspectionApplicationService(inspectionStore);
+    this.inspectionStore =
+        inspectionStore != null
+            ? inspectionStore
+            : new InspectionProcessAdapters.InspectionProcessSnapshotStore(
+                dataDirectory.resolve("inspection-state.bin"));
+    this.inspectionService = new InspectionApplicationService(this.inspectionStore);
     SlicePolicies policies = policies();
     service =
         new KeyHandoverApplicationService(
@@ -402,7 +414,17 @@ public final class KeyHandoverDemoService {
   }
 
   private String requestJson(KeyHandoverState state) {
-    return requestJson(state, null);
+    InspectionProcess inspection = null;
+    try {
+      inspection =
+          inspectionStore
+              .findByBusinessKey(
+                  InspectionBusinessKey.of(
+                      state.propertyReference(), "synthetic", state.requestId()))
+              .orElse(null);
+    } catch (Exception ignored) {
+    }
+    return requestJson(state, inspection);
   }
 
   private String requestJson(KeyHandoverState state, InspectionProcess inspection) {

@@ -17,7 +17,9 @@ export type DevelopmentIdentity =
   | "financeOfficer"
   | "legalOfficer"
   | "teamHead"
-  | "processOwner";
+  | "processOwner"
+  | "inspectionOfficer"
+  | "remediationOfficer";
 
 export interface AuditEvent {
   id: string;

@@ -22,6 +22,8 @@ const identities: { value: DevelopmentIdentity; label: string }[] = [
   { value: "handoverOfficer", label: "Handover officer" },
   { value: "financeOfficer", label: "Finance officer" },
   { value: "legalOfficer", label: "Legal officer" },
+  { value: "inspectionOfficer", label: "Inspection officer" },
+  { value: "remediationOfficer", label: "Remediation officer" },
   { value: "teamHead", label: "Team Head" },
   { value: "processOwner", label: "Process owner" }
 ];
@@ -206,6 +208,7 @@ export function App() {
             selectedId={selectedInspectionId}
             detail={inspectionDetail}
             busy={busy}
+            identity={identity}
             onSelect={selectInspection}
             onAction={inspAction}
           />
@@ -375,13 +378,13 @@ function RequestDetail({
               </button>
             </p>
           )}
-          {blocked && (
+          {blocked && identity === "processOwner" && (
             <button
               className="secondary"
               disabled={busy}
               onClick={() => void onAction("inspection/resume")}
             >
-              Resume after inspection
+              Resume after inspection (recovery)
             </button>
           )}
         </article>
@@ -889,6 +892,7 @@ function InspectionWorkspace({
   selectedId,
   detail,
   busy,
+  identity,
   onSelect,
   onAction,
 }: {
@@ -896,6 +900,7 @@ function InspectionWorkspace({
   selectedId: string;
   detail: InspectionProcess | null;
   busy: boolean;
+  identity: DevelopmentIdentity;
   onSelect: (id: string) => void;
   onAction: (fn: () => Promise<InspectionProcess>) => void;
 }) {
@@ -971,13 +976,14 @@ function InspectionWorkspace({
             <h3>Tasks</h3>
             <div className="task-grid">
               {detail.tasks.map((task) => (
-                <InspectionTaskCard
-                  key={task.id}
-                  task={task}
-                  process={detail}
-                  busy={busy}
-                  onAction={onAction}
-                />
+                  <InspectionTaskCard
+                    key={task.id}
+                    task={task}
+                    process={detail}
+                    busy={busy}
+                    identity={identity}
+                    onAction={onAction}
+                  />
               ))}
             </div>
           </section>
@@ -1008,16 +1014,19 @@ function InspectionTaskCard({
   task,
   process,
   busy,
+  identity,
   onAction,
 }: {
   task: InspectionTask;
   process: InspectionProcess;
   busy: boolean;
+  identity: DevelopmentIdentity;
   onAction: (fn: () => Promise<InspectionProcess>) => void;
 }) {
   const open = task.status === "OPEN";
   const claimed = task.status === "CLAIMED";
   const isInspection = task.type === "INSPECTION";
+  const actor = identity; // use the selected development identity
   return (
     <article className="task-card">
       <div className="task-card-heading">
@@ -1031,7 +1040,7 @@ function InspectionTaskCard({
         <button
           disabled={busy}
           onClick={() =>
-            onAction(() => inspectionApi.claimTask(process.id, task.id, "inspection-officer"))
+            onAction(() => inspectionApi.claimTask(process.id, task.id, actor))
           }
         >
           Claim inspection
@@ -1042,7 +1051,7 @@ function InspectionTaskCard({
           disabled={busy}
           onClick={() =>
             onAction(() =>
-              inspectionApi.claimRemediation(process.id, task.id, "remediation-officer")
+              inspectionApi.claimRemediation(process.id, task.id, actor)
             )
           }
         >
@@ -1058,7 +1067,7 @@ function InspectionTaskCard({
                 inspectionApi.completePassed(
                   process.id,
                   task.id,
-                  "inspection-officer",
+                  actor,
                   "All clear",
                   "evidence-passed"
                 )
@@ -1074,7 +1083,7 @@ function InspectionTaskCard({
                 inspectionApi.completeFailed(
                   process.id,
                   task.id,
-                  "inspection-officer",
+                  actor,
                   "Issues found",
                   "evidence-failed"
                 )
@@ -1093,7 +1102,7 @@ function InspectionTaskCard({
               inspectionApi.completeRemediation(
                 process.id,
                 task.id,
-                "remediation-officer",
+                actor,
                 "All issues resolved",
                 "remediation-evid"
               )

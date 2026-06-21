@@ -1,5 +1,6 @@
 package com.sevenewf.workflow.backend.inspection;
 
+import com.sevenewf.workflow.domain.inspection.InspectionProcessStore;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import java.io.IOException;
@@ -14,6 +15,10 @@ public final class InspectionDemoHttpHandler implements HttpHandler {
 
   public InspectionDemoHttpHandler(Path dataDirectory) {
     service = new InspectionDemoService(dataDirectory);
+  }
+
+  public InspectionDemoHttpHandler(Path dataDirectory, InspectionProcessStore store) {
+    service = new InspectionDemoService(dataDirectory, store);
   }
 
   @Override

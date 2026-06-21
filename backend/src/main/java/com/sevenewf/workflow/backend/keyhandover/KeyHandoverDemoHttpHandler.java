@@ -1,5 +1,6 @@
 package com.sevenewf.workflow.backend.keyhandover;
 
+import com.sevenewf.workflow.domain.inspection.InspectionProcessStore;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import java.io.IOException;
@@ -15,6 +16,10 @@ public final class KeyHandoverDemoHttpHandler implements HttpHandler {
 
   public KeyHandoverDemoHttpHandler(Path dataDirectory) {
     service = new KeyHandoverDemoService(dataDirectory);
+  }
+
+  public KeyHandoverDemoHttpHandler(Path dataDirectory, InspectionProcessStore inspectionStore) {
+    service = new KeyHandoverDemoService(dataDirectory, inspectionStore);
   }
 
   @Override
