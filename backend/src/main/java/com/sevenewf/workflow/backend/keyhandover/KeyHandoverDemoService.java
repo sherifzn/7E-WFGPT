@@ -1,10 +1,14 @@
 package com.sevenewf.workflow.backend.keyhandover;
 
+import com.sevenewf.workflow.adapters.inspection.synthetic.InspectionProcessAdapters;
 import com.sevenewf.workflow.adapters.keyhandover.synthetic.SyntheticKeyHandoverAdapters.PathBackedKeyHandoverStateStore;
 import com.sevenewf.workflow.domain.common.ActorId;
 import com.sevenewf.workflow.domain.common.CausationId;
 import com.sevenewf.workflow.domain.common.CorrelationId;
 import com.sevenewf.workflow.domain.common.DomainVersion;
+import com.sevenewf.workflow.domain.inspection.InspectionApplicationService;
+import com.sevenewf.workflow.domain.inspection.InspectionProcess;
+import com.sevenewf.workflow.domain.inspection.InspectionProcessStore;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverApplicationService;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.AuthorizationDeniedException;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.ConflictingDuplicateCompletionException;
@@ -14,8 +18,8 @@ import com.sevenewf.workflow.domain.keyhandover.KeyHandoverExceptions.Validation
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverPorts.*;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverState;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.*;
-import com.sevenewf.workflow.domain.keyhandover.hold.BusinessDays;
 import com.sevenewf.workflow.domain.keyhandover.hold.BranchRemediation;
+import com.sevenewf.workflow.domain.keyhandover.hold.BusinessDays;
 import com.sevenewf.workflow.domain.keyhandover.hold.HoldRecord;
 import java.math.BigDecimal;
 import java.nio.file.Files;
@@ -31,6 +35,8 @@ public final class KeyHandoverDemoService {
   private final PersistentDemoAuditSink audits;
   private final DemoNotificationConnector notifications = new DemoNotificationConnector();
   private final KeyHandoverApplicationService service;
+  private final InspectionApplicationService inspectionService;
+  private final InspectionProcessStore inspectionStore;
   private final Path dataDirectory;
   private final boolean localDevelopmentMode;
   private int sequence;
@@ -48,6 +54,10 @@ public final class KeyHandoverDemoService {
     this.localDevelopmentMode = localDevelopmentMode;
     store = new PathBackedKeyHandoverStateStore(dataDirectory.resolve("key-handover-state.bin"));
     audits = new PersistentDemoAuditSink(dataDirectory.resolve("audit-events.tsv"));
+    inspectionStore =
+        new InspectionProcessAdapters.InspectionProcessSnapshotStore(
+            dataDirectory.resolve("inspection-state.bin"));
+    inspectionService = new InspectionApplicationService(inspectionStore);
     SlicePolicies policies = policies();
     service =
         new KeyHandoverApplicationService(
@@ -116,7 +126,20 @@ public final class KeyHandoverDemoService {
                 actor(parameters),
                 correlation(number),
                 causation(number, "submit")));
-    return new ApiResponse(201, requestJson(state));
+    InspectionProcess inspection =
+        inspectionService.requestOrCorrelate(
+            new InspectionApplicationService.InspectionRequestCommand(
+                state.requestId(),
+                new PropertyReference(property),
+                "synthetic",
+                new com.sevenewf.workflow.domain.inspection.InspectionCommandMetadata(
+                    new ActorId(parameters.getOrDefault("actor", "requester")),
+                    InspectionProcess.InspectionRole.INSPECTION_OFFICER,
+                    new DomainVersion(1),
+                    correlation(number),
+                    causation(number, "inspection-request"),
+                    java.time.Instant.now())));
+    return new ApiResponse(201, requestJson(state, inspection));
   }
 
   private KeyHandoverState action(
@@ -379,64 +402,78 @@ public final class KeyHandoverDemoService {
   }
 
   private String requestJson(KeyHandoverState state) {
-    return "{"
-        + field("requestNumber", state.businessKey().value())
-        + ","
-        + field("property", state.propertyReference().value())
-        + ","
-        + field("owner", state.ownerReference().value())
-        + ","
-        + field("status", label(state.status()))
-        + ",\"stateVersion\":"
-        + state.stateVersion().value()
-        + ","
-        + field(
-            "inspection",
-            state.inspectionStatus().validInspectionExists() ? "Available" : "Waiting")
-        + ","
-        + field(
-            "finalDecision",
-            state.finalDecision().map(decision -> label(decision.action())).orElse(""))
-        + ","
-        + field(
-            "notification",
-            state.notificationState().map(value -> label(value.status())).orElse("Not started"))
-        + ",\"notificationAttempts\":"
-        + state.notificationState().map(NotificationState::attemptCount).orElse(0)
-        + ","
-        + field(
-            "notificationFailure",
-            state
-                .notificationState()
-                .flatMap(NotificationState::lastFailureReference)
-                .map(FailureReference::value)
-                .orElse(""))
-        + ","
-        + field(
-            "exceptionDecision",
-            state.exceptionDecision().map(value -> label(value.decision())).orElse(""))
-        + ","
-        + field("exceptionReason", state.exceptionDecision().map(ExceptionDecision::reason).orElse(""))
-        + ","
-        + field(
-            "authorizationId",
-            state.authorization().map(value -> value.authorizationId().value()).orElse(""))
-        + ","
-        + field("lastUpdated", state.updatedAt().toString())
-        + ",\"tasks\":"
-        + tasksJson(state)
-        + ",\"audit\":"
-        + auditJson(state)
-        + ",\"hold\":"
-        + holdJsonOrNull(state)
-        + "}";
+    return requestJson(state, null);
+  }
+
+  private String requestJson(KeyHandoverState state, InspectionProcess inspection) {
+    StringBuilder sb = new StringBuilder("{");
+    sb.append(field("requestNumber", state.businessKey().value()));
+    sb.append(",").append(field("property", state.propertyReference().value()));
+    sb.append(",").append(field("owner", state.ownerReference().value()));
+    sb.append(",").append(field("status", label(state.status())));
+    sb.append(",\"stateVersion\":").append(state.stateVersion().value());
+    sb.append(",")
+        .append(
+            field(
+                "inspection",
+                state.inspectionStatus().validInspectionExists() ? "Available" : "Waiting"));
+    if (inspection != null)
+      sb.append(",").append(field("inspectionProcessId", inspection.id().value()));
+    if (inspection != null)
+      sb.append(",").append(field("inspectionProcessId", inspection.id().value()));
+    sb.append(",")
+        .append(
+            field(
+                "finalDecision",
+                state.finalDecision().map(decision -> label(decision.action())).orElse("")));
+    sb.append(",")
+        .append(
+            field(
+                "notification",
+                state
+                    .notificationState()
+                    .map(value -> label(value.status()))
+                    .orElse("Not started")));
+    sb.append(",\"notificationAttempts\":")
+        .append(state.notificationState().map(NotificationState::attemptCount).orElse(0));
+    sb.append(",")
+        .append(
+            field(
+                "notificationFailure",
+                state
+                    .notificationState()
+                    .flatMap(NotificationState::lastFailureReference)
+                    .map(FailureReference::value)
+                    .orElse("")));
+    sb.append(",")
+        .append(
+            field(
+                "exceptionDecision",
+                state.exceptionDecision().map(value -> label(value.decision())).orElse("")));
+    sb.append(",")
+        .append(
+            field(
+                "exceptionReason",
+                state.exceptionDecision().map(ExceptionDecision::reason).orElse("")));
+    sb.append(",")
+        .append(
+            field(
+                "authorizationId",
+                state.authorization().map(value -> value.authorizationId().value()).orElse("")));
+    sb.append(",").append(field("lastUpdated", state.updatedAt().toString()));
+    sb.append(",\"tasks\":").append(tasksJson(state));
+    sb.append(",\"audit\":").append(auditJson(state));
+    sb.append(",\"hold\":").append(holdJsonOrNull(state));
+    sb.append("}");
+    return sb.toString();
   }
 
   private static String notificationJson(KeyHandoverState state) {
     NotificationState notification =
         state
             .notificationState()
-            .orElseThrow(() -> new ValidationFailedException("No notification status is available"));
+            .orElseThrow(
+                () -> new ValidationFailedException("No notification status is available"));
     return "{"
         + field("status", label(notification.status()))
         + ",\"attemptCount\":"
@@ -762,10 +799,12 @@ public final class KeyHandoverDemoService {
     }
   }
 
-  private static DomainVersion expectedVersion(
-      Map<String, String> values, KeyHandoverState state) {
+  private static DomainVersion expectedVersion(Map<String, String> values, KeyHandoverState state) {
     String value = values.get("expectedStateVersion");
-    return new DomainVersion(value == null || value.isBlank() ? state.stateVersion().value() : integer(values, "expectedStateVersion"));
+    return new DomainVersion(
+        value == null || value.isBlank()
+            ? state.stateVersion().value()
+            : integer(values, "expectedStateVersion"));
   }
 
   private int nextSequence() {
@@ -943,8 +982,8 @@ public final class KeyHandoverDemoService {
           actorId,
           occurredAt,
           correlationId,
-        causationId,
-        metadata);
+          causationId,
+          metadata);
     }
   }
 

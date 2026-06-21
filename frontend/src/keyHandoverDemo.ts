@@ -73,6 +73,7 @@ export interface KeyHandoverRequest {
   tasks: ClearanceTask[];
   audit: AuditEvent[];
   hold: HoldDetails | null;
+  inspectionProcessId?: string;
 }
 
 const baseUrl = import.meta.env.VITE_KEY_HANDOVER_API_URL ?? "/api/key-handovers";

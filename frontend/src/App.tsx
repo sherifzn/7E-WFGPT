@@ -135,6 +135,7 @@ export function App() {
       setOwnerReference("");
       setView("requests");
       setMessage(`${created.requestNumber} created and waiting for inspection.`);
+      void loadInspections();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The request could not be created.");
     } finally {
@@ -240,6 +241,7 @@ export function App() {
               identity={identity}
               onAction={perform}
               onUpdate={replace}
+              onNavInspections={() => void loadInspections().then(() => setView("inspections"))}
             />
           </div>
         )}
@@ -335,13 +337,15 @@ function RequestDetail({
   busy,
   identity,
   onAction,
-  onUpdate
+  onUpdate,
+  onNavInspections
 }: {
   request: KeyHandoverRequest;
   busy: boolean;
   identity: DevelopmentIdentity;
   onAction: (path: string, parameters?: Record<string, string>) => Promise<void>;
   onUpdate: (updated: KeyHandoverRequest) => void;
+  onNavInspections: () => void;
 }) {
   const blocked = request.inspection === "Waiting";
   const displayedFinalState = finalState(request);
@@ -359,6 +363,18 @@ function RequestDetail({
         <article>
           <span>Inspection</span>
           <strong>{request.inspection}</strong>
+          {request.inspectionProcessId && (
+            <p style={{ fontSize: "0.75rem", color: "#5f7184", marginTop: "0.25rem" }}>
+              Process: <code>{request.inspectionProcessId}</code>
+              <button
+                className="quiet"
+                style={{ marginLeft: "0.5rem", fontSize: "0.75rem" }}
+                onClick={onNavInspections}
+              >
+                View
+              </button>
+            </p>
+          )}
           {blocked && (
             <button
               className="secondary"
@@ -883,7 +899,7 @@ function InspectionWorkspace({
   onSelect: (id: string) => void;
   onAction: (fn: () => Promise<InspectionProcess>) => void;
 }) {
-  return (
+  return detail ? (
     <div className="request-layout">
       <section className="request-list-panel" aria-label="Inspection processes">
         <p className="eyebrow">Inspection processes</p>
@@ -901,76 +917,91 @@ function InspectionWorkspace({
           </button>
         ))}
       </section>
-      {detail && (
-        <section className="detail-panel" aria-label="Inspection detail">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Inspection process</p>
-              <h2>{detail.id}</h2>
-            </div>
-            <span className={`status ${statusClass(detail.status)}`}>{detail.status}</span>
+      <section className="detail-panel" aria-label="Inspection detail">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Inspection process</p>
+            <h2>{detail.id}</h2>
           </div>
-          <div className="summary-grid">
-            <div>
-              <strong>Parent</strong>
-              <span>{detail.parentRequestId}</span>
-            </div>
-            <div>
-              <strong>Property</strong>
-              <span>{detail.propertyReference}</span>
-            </div>
-            <div>
-              <strong>Type</strong>
-              <span>{detail.inspectionType}</span>
-            </div>
+          <span className={`status ${statusClass(detail.status)}`}>{detail.status}</span>
+        </div>
+        <div className="summary-grid">
+          <div>
+            <strong>Parent</strong>
+            <span>{detail.parentRequestId}</span>
           </div>
-          {detail.cancellationReason && (
-            <p className="form-message" role="alert">
-              Cancelled: {detail.cancellationReason}
-            </p>
-          )}
-          {detail.attempts.length > 0 && (
-            <section className="inspection-section">
-              <h3>Inspection attempts</h3>
-              {detail.attempts.map((a) => (
-                <p key={a.number} className="inspection-action">
-                  Attempt {a.number}: {a.result} — {a.findings}
-                  {a.validUntil && <> (valid until {a.validUntil})</>}
-                </p>
+          <div>
+            <strong>Property</strong>
+            <span>{detail.propertyReference}</span>
+          </div>
+          <div>
+            <strong>Type</strong>
+            <span>{detail.inspectionType}</span>
+          </div>
+        </div>
+        {detail.cancellationReason && (
+          <p className="form-message" role="alert">
+            Cancelled: {detail.cancellationReason}
+          </p>
+        )}
+        {detail.attempts.length > 0 && (
+          <section className="inspection-section">
+            <h3>Inspection attempts</h3>
+            {detail.attempts.map((a) => (
+              <p key={a.number} className="inspection-action">
+                Attempt {a.number}: {a.result} — {a.findings}
+                {a.validUntil && <> (valid until {a.validUntil})</>}
+              </p>
+            ))}
+          </section>
+        )}
+        {detail.remediationCycles.length > 0 && (
+          <section className="inspection-section">
+            <h3>Remediation cycles</h3>
+            {detail.remediationCycles.map((c) => (
+              <p key={c.number} className="inspection-action">
+                Cycle {c.number}: {c.status}
+                {c.resolutionSummary && <> — {c.resolutionSummary}</>}
+              </p>
+            ))}
+          </section>
+        )}
+        {detail.tasks.length > 0 && (
+          <section className="inspection-section">
+            <h3>Tasks</h3>
+            <div className="task-grid">
+              {detail.tasks.map((task) => (
+                <InspectionTaskCard
+                  key={task.id}
+                  task={task}
+                  process={detail}
+                  busy={busy}
+                  onAction={onAction}
+                />
               ))}
-            </section>
-          )}
-          {detail.remediationCycles.length > 0 && (
-            <section className="inspection-section">
-              <h3>Remediation cycles</h3>
-              {detail.remediationCycles.map((c) => (
-                <p key={c.number} className="inspection-action">
-                  Cycle {c.number}: {c.status}
-                  {c.resolutionSummary && <> — {c.resolutionSummary}</>}
-                </p>
-              ))}
-            </section>
-          )}
-          {detail.tasks.length > 0 && (
-            <section className="inspection-section">
-              <h3>Tasks</h3>
-              <div className="task-grid">
-                {detail.tasks.map((task) => (
-                  <InspectionTaskCard
-                    key={task.id}
-                    task={task}
-                    process={detail}
-                    busy={busy}
-                    onAction={onAction}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-          <AuditTimelineInspection detail={detail} />
-        </section>
-      )}
+            </div>
+          </section>
+        )}
+        <AuditTimelineInspection detail={detail} />
+      </section>
     </div>
+  ) : (
+    <section className="detail-panel" aria-label="Inspection processes">
+      <p className="eyebrow">Inspection processes</p>
+      <h2>Active and recent</h2>
+      {inspections.length === 0 && <p>No inspection processes yet.</p>}
+      {inspections.map((insp) => (
+        <button
+          key={insp.id}
+          className={`request-row${insp.id === selectedId ? " selected" : ""}`}
+          onClick={() => onSelect(insp.id)}
+        >
+          <span className="request-number">{insp.id}</span>
+          <span className="request-property">{insp.parentRequestId}</span>
+          <span className={statusClass(insp.status)}>{insp.status}</span>
+        </button>
+      ))}
+    </section>
   );
 }
 function InspectionTaskCard({
