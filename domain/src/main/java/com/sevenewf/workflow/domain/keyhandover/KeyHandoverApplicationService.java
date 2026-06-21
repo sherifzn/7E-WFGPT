@@ -613,7 +613,8 @@ public final class KeyHandoverApplicationService {
     requireVersion(state, command.expectedStateVersion());
     requireExceptionApprover(state, command);
     if (state.status() != RequestStatus.EXCEPTION_APPROVAL_REQUIRED)
-      throw new ValidationFailedException("Exception approval is not available for this request state");
+      throw new ValidationFailedException(
+          "Exception approval is not available for this request state");
 
     ExceptionDecision decision =
         new ExceptionDecision(
@@ -710,7 +711,8 @@ public final class KeyHandoverApplicationService {
                     command.causationId(),
                     authorization.evidenceReferences(),
                     exceptionMetadata(state, approved, command))));
-    return deliverNotification(saved, command.actor(), command.correlationId(), command.causationId());
+    return deliverNotification(
+        saved, command.actor(), command.correlationId(), command.causationId());
   }
 
   public void deliverPendingAudits() {
@@ -720,8 +722,7 @@ public final class KeyHandoverApplicationService {
     }
   }
 
-  private void requireExceptionApprover(
-      KeyHandoverState state, ExceptionDecisionCommand command) {
+  private void requireExceptionApprover(KeyHandoverState state, ExceptionDecisionCommand command) {
     try {
       authorizationService.require(command.actor(), Permission.DECIDE_EXCEPTION);
     } catch (RuntimeException exception) {
