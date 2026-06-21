@@ -21,41 +21,45 @@ final class KeyHandoverSliceIntegrationTest {
   private static final Instant START = Instant.parse("2026-06-19T08:00:00Z");
 
   @Test
-  void inspectionBarrierPreventsClearanceAndAuthorizationUntilExplicitResume() {
+  void inspectionBarrierPreventsHandoverButFinanceAndLegalAreOpenImmediately() {
     SliceContext context = new SliceContext("inspection-barrier");
     context.inspection.setInspectionStatus(new InspectionStatus(false, Optional.empty()));
     KeyHandoverState waiting = context.submit();
     assertEquals(RequestStatus.WAITING_FOR_INSPECTION, waiting.status());
-    assertTrue(waiting.branches().isEmpty());
+    assertEquals(2, waiting.branches().size());
+    assertTrue(waiting.branches().containsKey(ClearanceBranch.FINANCE));
+    assertTrue(waiting.branches().containsKey(ClearanceBranch.LEGAL));
+    assertEquals(BranchStatus.OPEN, waiting.branches().get(ClearanceBranch.FINANCE).status());
+    assertEquals(BranchStatus.OPEN, waiting.branches().get(ClearanceBranch.LEGAL).status());
+
     assertThrows(
         ValidationFailedException.class,
         () ->
             context.service.claimTask(
                 waiting.requestId(),
-                ClearanceBranch.FINANCE,
-                context.financeActor(),
+                ClearanceBranch.HANDOVER,
+                context.handoverActor(),
                 waiting.stateVersion(),
                 context.correlation(),
                 context.causation("claim")));
-    assertThrows(
-        ValidationFailedException.class,
-        () ->
-            context.service.completeFinanceBranch(
-                waiting.requestId(),
-                context.financeActor(),
-                waiting.stateVersion(),
-                context.correlation(),
-                context.causation("finance")));
-    assertEquals(0, context.finance.calls());
+
+    KeyHandoverState financeClaimed =
+        context.claim(waiting, ClearanceBranch.FINANCE, context.financeActor());
+    assertEquals(
+        BranchStatus.CLAIMED, financeClaimed.branches().get(ClearanceBranch.FINANCE).status());
 
     KeyHandoverState resumed =
-        context.service.resumeAfterInspection(context.inspectionAvailable(waiting));
+        context.service.resumeAfterInspection(context.inspectionAvailable(financeClaimed));
     assertEquals(RequestStatus.CLEARANCE_IN_PROGRESS, resumed.status());
-    assertEquals(1, resumed.branches().size());
+    assertEquals(3, resumed.branches().size());
     assertTrue(resumed.branches().containsKey(ClearanceBranch.HANDOVER));
+    assertTrue(resumed.branches().containsKey(ClearanceBranch.FINANCE));
+    assertTrue(resumed.branches().containsKey(ClearanceBranch.LEGAL));
+    assertEquals(BranchStatus.CLAIMED, resumed.branches().get(ClearanceBranch.FINANCE).status());
     assertEquals(
         resumed, context.service.resumeAfterInspection(context.inspectionAvailable(resumed)));
     assertTrue(context.audit.hasEvent("InspectionAvailable"));
+    assertTrue(context.audit.hasEvent("HandoverTaskOpened"));
   }
 
   @Test
@@ -782,6 +786,145 @@ final class KeyHandoverSliceIntegrationTest {
         Optional.empty(),
         List.of(),
         state.updatedAt());
+  }
+
+  @Test
+  void financeAndLegalCanBeCompletedWhileWaitingForInspection() {
+    SliceContext context = new SliceContext("finance-legal-waiting");
+    context.inspection.setInspectionStatus(new InspectionStatus(false, Optional.empty()));
+    KeyHandoverState waiting = context.submit();
+
+    KeyHandoverState financeClaimed =
+        context.claim(waiting, ClearanceBranch.FINANCE, context.financeActor());
+    KeyHandoverState financeCompleted = context.completeFinance(financeClaimed);
+    assertEquals(
+        BranchStatus.COMPLETED, financeCompleted.branches().get(ClearanceBranch.FINANCE).status());
+
+    KeyHandoverState legalClaimed =
+        context.claim(financeCompleted, ClearanceBranch.LEGAL, context.legalActor());
+    KeyHandoverState legalCompleted =
+        context.service.completeLegalBranch(
+            legalClaimed.requestId(),
+            context.legalActor(),
+            ClearanceOutcome.GREEN,
+            legalClaimed.stateVersion(),
+            context.correlation(),
+            context.causation("legal"));
+    assertEquals(
+        BranchStatus.COMPLETED, legalCompleted.branches().get(ClearanceBranch.LEGAL).status());
+    assertEquals(RequestStatus.WAITING_FOR_INSPECTION, legalCompleted.status());
+    assertTrue(legalCompleted.finalDecision().isEmpty());
+  }
+
+  @Test
+  void inspectionResumePreservesFinanceAndLegalWithoutDuplication() {
+    SliceContext context = new SliceContext("inspection-resume-preservation");
+    context.inspection.setInspectionStatus(new InspectionStatus(false, Optional.empty()));
+    KeyHandoverState waiting = context.submit();
+
+    KeyHandoverState financeClaimed =
+        context.claim(waiting, ClearanceBranch.FINANCE, context.financeActor());
+    KeyHandoverState financeCompleted = context.completeFinance(financeClaimed);
+    Instant financeCompletedAt =
+        financeCompleted.branches().get(ClearanceBranch.FINANCE).openedAt();
+    ActorId financeAssignee =
+        financeCompleted.branches().get(ClearanceBranch.FINANCE).completedBy().orElseThrow();
+
+    KeyHandoverState legalClaimed =
+        context.claim(financeCompleted, ClearanceBranch.LEGAL, context.legalActor());
+    KeyHandoverState legalCompleted =
+        context.service.completeLegalBranch(
+            legalClaimed.requestId(),
+            context.legalActor(),
+            ClearanceOutcome.GREEN,
+            legalClaimed.stateVersion(),
+            context.correlation(),
+            context.causation("legal"));
+    ActorId legalAssignee =
+        legalCompleted.branches().get(ClearanceBranch.LEGAL).completedBy().orElseThrow();
+
+    KeyHandoverState resumed =
+        context.service.resumeAfterInspection(context.inspectionAvailable(legalCompleted));
+    assertEquals(RequestStatus.CLEARANCE_IN_PROGRESS, resumed.status());
+    assertEquals(3, resumed.branches().size());
+    assertTrue(resumed.branches().containsKey(ClearanceBranch.HANDOVER));
+    assertEquals(BranchStatus.COMPLETED, resumed.branches().get(ClearanceBranch.FINANCE).status());
+    assertEquals(BranchStatus.COMPLETED, resumed.branches().get(ClearanceBranch.LEGAL).status());
+    assertEquals(
+        financeAssignee,
+        resumed.branches().get(ClearanceBranch.FINANCE).completedBy().orElseThrow());
+    assertEquals(
+        legalAssignee, resumed.branches().get(ClearanceBranch.LEGAL).completedBy().orElseThrow());
+    assertEquals(financeCompletedAt, resumed.branches().get(ClearanceBranch.FINANCE).openedAt());
+  }
+
+  @Test
+  void finalDecisionRequiresAllThreeBranchesAndNeverAuthorizesWithMissingBranch() {
+    SliceContext context = new SliceContext("final-decision-safety");
+    KeyHandoverState state = context.submit();
+    state = context.claim(state, ClearanceBranch.HANDOVER, context.handoverActor());
+    state =
+        context.complete(
+            state, ClearanceBranch.HANDOVER, ClearanceOutcome.GREEN, context.handoverActor());
+    assertEquals(RequestStatus.CLEARANCE_IN_PROGRESS, state.status());
+    assertTrue(state.finalDecision().isEmpty());
+
+    state = context.claim(state, ClearanceBranch.FINANCE, context.financeActor());
+    state = context.completeFinance(state);
+    assertTrue(state.finalDecision().isEmpty());
+
+    state = context.claim(state, ClearanceBranch.LEGAL, context.legalActor());
+    state = context.completeLegal(state);
+    assertEquals(RequestStatus.AUTHORIZED, state.status());
+    assertTrue(state.finalDecision().isPresent());
+  }
+
+  @Test
+  void endToEndMissingInspectionThenFinanceLegalThenInspectionThenHandover() {
+    SliceContext context = new SliceContext("e2e-missing-inspection");
+    context.inspection.setInspectionStatus(new InspectionStatus(false, Optional.empty()));
+    KeyHandoverState state = context.submit();
+    assertEquals(RequestStatus.WAITING_FOR_INSPECTION, state.status());
+
+    state = context.claim(state, ClearanceBranch.FINANCE, context.financeActor());
+    state = context.completeFinance(state);
+    state = context.claim(state, ClearanceBranch.LEGAL, context.legalActor());
+    state = context.completeLegal(state);
+    assertTrue(state.finalDecision().isEmpty());
+
+    state = context.service.resumeAfterInspection(context.inspectionAvailable(state));
+    assertEquals(RequestStatus.CLEARANCE_IN_PROGRESS, state.status());
+    assertTrue(state.branches().containsKey(ClearanceBranch.HANDOVER));
+
+    state = context.claim(state, ClearanceBranch.HANDOVER, context.handoverActor());
+    state =
+        context.complete(
+            state, ClearanceBranch.HANDOVER, ClearanceOutcome.GREEN, context.handoverActor());
+    assertEquals(RequestStatus.AUTHORIZED, state.status());
+    assertTrue(state.authorization().isPresent());
+  }
+
+  @Test
+  void endToEndInspectionFirstThenHandoverOnlyDoesNotAuthorizeUntilFinanceLegalComplete() {
+    SliceContext context = new SliceContext("e2e-inspection-first");
+    KeyHandoverState state = context.submit();
+    assertEquals(RequestStatus.CLEARANCE_IN_PROGRESS, state.status());
+    assertEquals(3, state.branches().size());
+
+    state = context.claim(state, ClearanceBranch.HANDOVER, context.handoverActor());
+    state =
+        context.complete(
+            state, ClearanceBranch.HANDOVER, ClearanceOutcome.GREEN, context.handoverActor());
+    assertEquals(RequestStatus.CLEARANCE_IN_PROGRESS, state.status());
+    assertTrue(state.finalDecision().isEmpty());
+
+    state = context.claim(state, ClearanceBranch.FINANCE, context.financeActor());
+    state = context.completeFinance(state);
+    assertTrue(state.finalDecision().isEmpty());
+
+    state = context.claim(state, ClearanceBranch.LEGAL, context.legalActor());
+    state = context.completeLegal(state);
+    assertEquals(RequestStatus.AUTHORIZED, state.status());
   }
 
   private static final class SliceContext {

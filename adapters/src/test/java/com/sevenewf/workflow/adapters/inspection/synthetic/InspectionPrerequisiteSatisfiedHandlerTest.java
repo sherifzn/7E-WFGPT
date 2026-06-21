@@ -52,7 +52,9 @@ final class InspectionPrerequisiteSatisfiedHandlerTest {
     assertEquals(KeyHandoverTypes.RequestStatus.CLEARANCE_IN_PROGRESS, resumed.status());
     assertFalse(resumed.branches().isEmpty());
     assertTrue(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.HANDOVER));
-    assertEquals(1, resumed.branches().size());
+    assertTrue(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.FINANCE));
+    assertTrue(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.LEGAL));
+    assertEquals(3, resumed.branches().size());
     assertEquals(1, ctx.eventStore.pendingResumeEvents().size());
     assertTrue(ctx.eventStore.pendingResumeEvents().get(0).handled());
     assertTrue(
@@ -74,7 +76,10 @@ final class InspectionPrerequisiteSatisfiedHandlerTest {
     ctx.handler.drainPendingEvents();
 
     KeyHandoverState resumed = ctx.khStore.findById(waiting.requestId()).orElseThrow();
-    assertFalse(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.FINANCE));
+    assertTrue(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.FINANCE));
+    assertEquals(
+        KeyHandoverTypes.BranchStatus.OPEN,
+        resumed.branches().get(KeyHandoverTypes.ClearanceBranch.FINANCE).status());
   }
 
   @Test
@@ -88,7 +93,10 @@ final class InspectionPrerequisiteSatisfiedHandlerTest {
     ctx.handler.drainPendingEvents();
 
     KeyHandoverState resumed = ctx.khStore.findById(waiting.requestId()).orElseThrow();
-    assertFalse(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.LEGAL));
+    assertTrue(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.LEGAL));
+    assertEquals(
+        KeyHandoverTypes.BranchStatus.OPEN,
+        resumed.branches().get(KeyHandoverTypes.ClearanceBranch.LEGAL).status());
   }
 
   @Test
@@ -431,7 +439,7 @@ final class InspectionPrerequisiteSatisfiedHandlerTest {
     ctx.handler.drainPendingEvents();
     KeyHandoverState stillCancelled = ctx.khStore.findById(waiting.requestId()).orElseThrow();
     assertEquals(KeyHandoverTypes.RequestStatus.CANCELLED, stillCancelled.status());
-    assertEquals(0, stillCancelled.branches().size());
+    assertEquals(2, stillCancelled.branches().size());
     assertTrue(ctx.eventStore.pendingResumeEvents().get(0).handled());
     assertTrue(
         ctx.khStore.pendingAudits().stream()

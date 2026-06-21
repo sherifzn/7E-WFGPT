@@ -769,6 +769,11 @@ public final class SyntheticKeyHandoverAdapters {
         List<EvidenceReference> evidence,
         CorrelationId correlationId,
         CausationId causationId) {
+      Set<ClearanceBranch> required =
+          EnumSet.of(ClearanceBranch.HANDOVER, ClearanceBranch.FINANCE, ClearanceBranch.LEGAL);
+      if (!state.branches().keySet().containsAll(required))
+        throw new IllegalStateException(
+            "Cannot decide final outcome: required branches are missing");
       Map<ClearanceBranch, ClearanceOutcome> outcomes = new EnumMap<>(ClearanceBranch.class);
       state
           .branches()

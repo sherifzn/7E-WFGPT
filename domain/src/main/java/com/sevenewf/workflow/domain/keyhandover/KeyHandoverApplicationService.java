@@ -11,6 +11,7 @@ import com.sevenewf.workflow.domain.keyhandover.hold.*;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -133,6 +134,11 @@ public final class KeyHandoverApplicationService {
                           inspectionChildKey(submission.businessKey())),
                   "startInspectionChildWorkflow"));
     Instant now = clock.now();
+    Map<ClearanceBranch, BranchState> branches = new EnumMap<>(ClearanceBranch.class);
+    branches.put(ClearanceBranch.FINANCE, openBranch(ClearanceBranch.FINANCE, now));
+    branches.put(ClearanceBranch.LEGAL, openBranch(ClearanceBranch.LEGAL, now));
+    if (inspectionStatus.validInspectionExists())
+      branches.put(ClearanceBranch.HANDOVER, openBranch(ClearanceBranch.HANDOVER, now));
     KeyHandoverState state =
         new KeyHandoverState(
             requestId(submission.businessKey()),
@@ -143,34 +149,64 @@ public final class KeyHandoverApplicationService {
             status,
             inspectionStatus,
             child,
-            inspectionStatus.validInspectionExists() ? openBranches(now) : Map.of(),
+            branches,
             Optional.empty(),
             Optional.empty(),
             Optional.empty(),
             Optional.empty(),
             List.of(),
             now);
-    List<AuditRecord> audits =
-        List.of(
-            audit(
-                "KeyHandoverSubmitted",
-                state,
-                submission.submittedBy().actorId(),
-                submission.correlationId(),
-                submission.causationId(),
-                List.of(),
-                Map.of()),
-            audit(
-                inspectionStatus.validInspectionExists()
-                    ? "ClearanceTasksOpened"
-                    : "InspectionChildWorkflowLinked",
-                state,
-                submission.submittedBy().actorId(),
-                submission.correlationId(),
-                submission.causationId(),
-                List.of(),
-                Map.of()));
-    KeyHandoverState inserted = stateStore.insertIfAbsent(state, audits);
+    List<AuditRecord> audits = new java.util.ArrayList<>();
+    audits.add(
+        audit(
+            "KeyHandoverSubmitted",
+            state,
+            submission.submittedBy().actorId(),
+            submission.correlationId(),
+            submission.causationId(),
+            List.of(),
+            Map.of()));
+    if (!inspectionStatus.validInspectionExists())
+      audits.add(
+          audit(
+              "InspectionChildWorkflowLinked",
+              state,
+              submission.submittedBy().actorId(),
+              submission.correlationId(),
+              submission.causationId(),
+              List.of(),
+              Map.of()));
+    if (inspectionStatus.validInspectionExists())
+      audits.add(
+          audit(
+              "ClearanceTasksOpened",
+              state,
+              submission.submittedBy().actorId(),
+              submission.correlationId(),
+              submission.causationId(),
+              List.of(),
+              Map.of()));
+    else {
+      audits.add(
+          audit(
+              "FinanceTaskOpened",
+              state,
+              submission.submittedBy().actorId(),
+              submission.correlationId(),
+              submission.causationId(),
+              List.of(),
+              Map.of()));
+      audits.add(
+          audit(
+              "LegalTaskOpened",
+              state,
+              submission.submittedBy().actorId(),
+              submission.correlationId(),
+              submission.causationId(),
+              List.of(),
+              Map.of()));
+    }
+    KeyHandoverState inserted = stateStore.insertIfAbsent(state, List.copyOf(audits));
     deliverPendingAudits();
     return inserted;
   }
@@ -225,7 +261,7 @@ public final class KeyHandoverApplicationService {
     authorizationService.require(actor, Permission.CLAIM_TASK);
     KeyHandoverState state = requireState(requestId);
     requireVersion(state, expectedVersion);
-    requireClearanceInProgress(state);
+    requireClearanceInProgress(state, branch);
     BranchState current = requireBranch(state, branch);
     enforceEligibleAndAuthorized(current, actor);
     enforceSegregationOfDuties(state, current, actor.actorId());
@@ -266,7 +302,7 @@ public final class KeyHandoverApplicationService {
     authorizationService.require(command.reassignedBy(), Permission.REASSIGN_TASK);
     KeyHandoverState state = requireState(command.requestId());
     requireVersion(state, command.expectedStateVersion());
-    requireClearanceInProgress(state);
+    requireClearanceInProgress(state, command.branch());
     BranchState current = requireBranch(state, command.branch());
     enforceEligibleAndAuthorized(current, command.newAssignee());
     enforceSegregationOfDuties(state, current, command.newAssignee().actorId());
@@ -308,7 +344,7 @@ public final class KeyHandoverApplicationService {
       throw new ValidationFailedException("Emergency reassignment authority has expired");
     KeyHandoverState state = requireState(command.requestId());
     requireVersion(state, command.expectedStateVersion());
-    requireClearanceInProgress(state);
+    requireClearanceInProgress(state, command.branch());
     BranchState current = requireBranch(state, command.branch());
     enforceEligibleAndAuthorized(current, command.newAssignee());
     enforceSegregationOfDuties(state, current, command.newAssignee().actorId());
@@ -356,7 +392,7 @@ public final class KeyHandoverApplicationService {
   private KeyHandoverState completeHumanBranch(BranchCompletion command) {
     authorizationService.require(command.completedBy(), Permission.COMPLETE_TASK);
     KeyHandoverState state = requireState(command.requestId());
-    requireClearanceInProgress(state);
+    requireClearanceInProgress(state, command.branch());
     BranchState current = requireBranch(state, command.branch());
     if (current.status() == BranchStatus.COMPLETED) {
       if (current.outcome().orElseThrow() == command.outcome()
@@ -1288,7 +1324,7 @@ public final class KeyHandoverApplicationService {
       KeyHandoverRequestId requestId, ClearanceBranch branch, Actor actor) {
     authorizationService.require(actor, Permission.VIEW_TASK);
     KeyHandoverState state = requireState(requestId);
-    requireClearanceInProgress(state);
+    requireClearanceInProgress(state, branch);
     BranchState task = requireBranch(state, branch);
     enforceEligibleAndAuthorized(task, actor);
     return state;
@@ -1296,7 +1332,10 @@ public final class KeyHandoverApplicationService {
 
   private KeyHandoverState maybeDecide(
       KeyHandoverState state, Actor actor, CorrelationId correlationId, CausationId causationId) {
+    Set<ClearanceBranch> required =
+        EnumSet.of(ClearanceBranch.HANDOVER, ClearanceBranch.FINANCE, ClearanceBranch.LEGAL);
     if (state.finalDecision().isPresent()
+        || !state.branches().keySet().containsAll(required)
         || state.branches().values().stream()
             .anyMatch(branch -> branch.status() != BranchStatus.COMPLETED)) return state;
     List<EvidenceReference> evidence =
@@ -1503,9 +1542,17 @@ public final class KeyHandoverApplicationService {
   }
 
   private void requireClearanceInProgress(KeyHandoverState state) {
-    if (state.status() == RequestStatus.WAITING_FOR_INSPECTION)
+    if (state.status() != RequestStatus.CLEARANCE_IN_PROGRESS
+        && state.status() != RequestStatus.WAITING_FOR_INSPECTION)
+      throw new ValidationFailedException("Clearance work is not available for this request state");
+  }
+
+  private void requireClearanceInProgress(KeyHandoverState state, ClearanceBranch branch) {
+    if (state.status() == RequestStatus.WAITING_FOR_INSPECTION
+        && branch == ClearanceBranch.HANDOVER)
       throw new ValidationFailedException("Inspection barrier has not been satisfied");
-    if (state.status() != RequestStatus.CLEARANCE_IN_PROGRESS)
+    if (state.status() != RequestStatus.CLEARANCE_IN_PROGRESS
+        && state.status() != RequestStatus.WAITING_FOR_INSPECTION)
       throw new ValidationFailedException("Clearance work is not available for this request state");
   }
 
