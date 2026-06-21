@@ -144,7 +144,8 @@ final class KeyHandoverDemoServiceTest {
     assertTrue(audit.contains("DuplicateExceptionDecisionAccepted"));
     assertTrue(audit.contains("ConflictingDuplicateExceptionDecisionRejected"));
 
-    KeyHandoverDemoService rejectedService = new KeyHandoverDemoService(temporaryDirectory.resolve("rejected"));
+    KeyHandoverDemoService rejectedService =
+        new KeyHandoverDemoService(temporaryDirectory.resolve("rejected"));
     KeyHandoverDemoService.ApiResponse rejectedException = completeToException(rejectedService);
     KeyHandoverDemoService.ApiResponse rejected =
         rejectedService.handle(
@@ -159,10 +160,15 @@ final class KeyHandoverDemoServiceTest {
     assertTrue(rejected.body().contains("Synthetic rejection reason"));
     assertTrue(rejected.body().contains("\"authorizationId\":\"\""));
     assertTrue(rejected.body().contains("\"notification\":\"Not started\""));
-    assertTrue(rejectedService.handle("GET", "/KH-102/audit", Map.of()).body().contains("ExceptionRejected"));
+    assertTrue(
+        rejectedService
+            .handle("GET", "/KH-102/audit", Map.of())
+            .body()
+            .contains("ExceptionRejected"));
   }
 
-  private static KeyHandoverDemoService.ApiResponse completeToException(KeyHandoverDemoService service) {
+  private static KeyHandoverDemoService.ApiResponse completeToException(
+      KeyHandoverDemoService service) {
     service.handle("POST", "/KH-102/tasks/handover/claim", Map.of("actor", "handoverOfficer"));
     service.handle(
         "POST",
@@ -245,7 +251,8 @@ final class KeyHandoverDemoServiceTest {
             .handle(
                 "POST",
                 "/KH-102/hold/resume",
-                Map.of("actor", "processOwner", "expectedStateVersion", String.valueOf(holdVersion)))
+                Map.of(
+                    "actor", "processOwner", "expectedStateVersion", String.valueOf(holdVersion)))
             .status());
     KeyHandoverDemoService.ApiResponse remediated =
         service.handle(
@@ -263,14 +270,20 @@ final class KeyHandoverDemoServiceTest {
             "POST",
             "/KH-102/hold/resume",
             Map.of(
-                "actor", "processOwner",
-                "expectedStateVersion", String.valueOf(stateVersion(remediated.body()))));
+                "actor",
+                "processOwner",
+                "expectedStateVersion",
+                String.valueOf(stateVersion(remediated.body()))));
     assertEquals(200, resumed.status());
     assertTrue(resumed.body().contains("Clearance in progress"));
     assertTrue(resumed.body().contains("HoldResumed"));
 
     KeyHandoverDemoService restarted = new KeyHandoverDemoService(temporaryDirectory);
-    assertTrue(restarted.handle("GET", "/KH-102/audit", Map.of()).body().contains("HoldResolutionRecorded"));
+    assertTrue(
+        restarted
+            .handle("GET", "/KH-102/audit", Map.of())
+            .body()
+            .contains("HoldResolutionRecorded"));
   }
 
   @Test
@@ -309,9 +322,11 @@ final class KeyHandoverDemoServiceTest {
             .status());
     KeyHandoverDemoService.ApiResponse delivered = service.handle("GET", "/" + request, Map.of());
     assertTrue(delivered.body().contains("Delivered"));
-    String authorizationId = delivered.body().replaceFirst(".*\\\"authorizationId\\\":\\\"([^\\\"]+).*", "$1");
+    String authorizationId =
+        delivered.body().replaceFirst(".*\\\"authorizationId\\\":\\\"([^\\\"]+).*", "$1");
     KeyHandoverDemoService.ApiResponse duplicate =
-        service.handle("POST", "/" + request + "/notification/retry", Map.of("actor", "processOwner"));
+        service.handle(
+            "POST", "/" + request + "/notification/retry", Map.of("actor", "processOwner"));
     assertEquals(200, duplicate.status());
     assertTrue(duplicate.body().contains(authorizationId));
     String audit = service.handle("GET", "/" + request + "/audit", Map.of()).body();
@@ -360,8 +375,7 @@ final class KeyHandoverDemoServiceTest {
         "POST", "/" + request + "/tasks/finance/claim", Map.of("actor", "financeOfficer"));
     service.handle(
         "POST", "/" + request + "/tasks/finance/complete", Map.of("actor", "financeOfficer"));
-    service.handle(
-        "POST", "/" + request + "/tasks/legal/claim", Map.of("actor", "legalOfficer"));
+    service.handle("POST", "/" + request + "/tasks/legal/claim", Map.of("actor", "legalOfficer"));
     service.handle(
         "POST",
         "/" + request + "/tasks/legal/complete",

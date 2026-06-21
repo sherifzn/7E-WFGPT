@@ -3,7 +3,10 @@ import { resolve } from "node:path";
 
 const rootDirectory = resolve(new URL("..", import.meta.url).pathname);
 const localDirectory = resolve(rootDirectory, ".local-dev");
-const pidPaths = [resolve(localDirectory, "pids", "backend.pid"), resolve(localDirectory, "pids", "frontend.pid")];
+const pidPaths = [
+  resolve(localDirectory, "pids", "backend.pid"),
+  resolve(localDirectory, "pids", "frontend.pid")
+];
 
 for (const pidPath of pidPaths) {
   const pid = await readFile(pidPath, "utf8")

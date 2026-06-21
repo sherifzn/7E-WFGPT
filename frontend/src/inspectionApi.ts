@@ -11,9 +11,19 @@ export type InspectionStatus =
 
 export type InspectionTaskType = "INSPECTION" | "REMEDIATION";
 export type InspectionTaskStatus = "OPEN" | "CLAIMED" | "COMPLETED" | "CANCELLED";
-export type InspectionRole = "INSPECTION_OFFICER" | "REMEDIATION_OFFICER" | "TEAM_HEAD" | "PROCESS_OWNER";
+export type InspectionRole =
+  | "INSPECTION_OFFICER"
+  | "REMEDIATION_OFFICER"
+  | "TEAM_HEAD"
+  | "PROCESS_OWNER";
 export type InspectionResult = "PASSED" | "FAILED";
-export type RemediationStatus = "REQUIRED" | "ASSIGNED" | "IN_PROGRESS" | "COMPLETED" | "REJECTED" | "CANCELLED";
+export type RemediationStatus =
+  | "REQUIRED"
+  | "ASSIGNED"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "REJECTED"
+  | "CANCELLED";
 
 export interface InspectionAttempt {
   number: number;
@@ -82,8 +92,8 @@ async function request<T>(path = "", options: RequestInit = {}): Promise<T> {
     ...options,
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      ...(options.headers ?? {}),
-    },
+      ...(options.headers ?? {})
+    }
   });
   const payload = (await response.json()) as T & { error?: string };
   if (!response.ok)
@@ -107,7 +117,7 @@ export const inspectionApi = {
       propertyReference,
       parentRequestId,
       actor,
-      inspectionType,
+      inspectionType
     });
     return request("", { method: "POST", body });
   },
@@ -129,7 +139,7 @@ export const inspectionApi = {
     const body = new URLSearchParams({ actor });
     return request(`/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/claim`, {
       method: "POST",
-      body,
+      body
     });
   },
 
@@ -203,5 +213,5 @@ export const inspectionApi = {
       `/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/complete-reinspection`,
       { method: "POST", body }
     );
-  },
+  }
 };

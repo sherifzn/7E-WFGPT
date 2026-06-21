@@ -277,7 +277,12 @@ describe("Key Handover API demo", () => {
 
 describe("Inspection workspace", () => {
   const inspectionList = [
-    { id: "inspection-test", status: "REQUESTED", parentRequestId: "khr-test", propertyReference: "Test Property" }
+    {
+      id: "inspection-test",
+      status: "REQUESTED",
+      parentRequestId: "khr-test",
+      propertyReference: "Test Property"
+    }
   ];
 
   const inspectionDetail = (overrides: Record<string, unknown> = {}) => ({
@@ -375,7 +380,9 @@ describe("Inspection workspace", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Inspections" }));
     fireEvent.click(await screen.findByText("inspection-test"));
     await screen.findByText("Tasks");
-    fireEvent.change(screen.getByLabelText("Testing as"), { target: { value: "inspectionOfficer" } });
+    fireEvent.change(screen.getByLabelText("Testing as"), {
+      target: { value: "inspectionOfficer" }
+    });
     expect(await screen.findByRole("button", { name: "Claim inspection" })).toBeVisible();
   });
 
@@ -386,17 +393,44 @@ describe("Inspection workspace", () => {
     fireEvent.click(await screen.findByText("inspection-test"));
     await screen.findByText("Remediation cycles");
     expect(screen.queryByRole("button", { name: "Claim remediation" })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Testing as"), { target: { value: "remediationOfficer" } });
+    fireEvent.change(screen.getByLabelText("Testing as"), {
+      target: { value: "remediationOfficer" }
+    });
     expect(await screen.findByRole("button", { name: "Claim remediation" })).toBeVisible();
   });
 
   it("renders the full inspection audit history", async () => {
     const history = [
-      { eventType: "InspectionRequested", actor: "system", timestamp: "2026-06-20T10:00:00Z", detail: "Process created" },
-      { eventType: "InspectionTaskCreated", actor: "system", timestamp: "2026-06-20T10:00:00Z", detail: "inspection-test-inspection-1" },
-      { eventType: "InspectionTaskClaimed", actor: "inspectionOfficer", timestamp: "2026-06-20T10:01:00Z", detail: "inspection-test-inspection-1" },
-      { eventType: "InspectionPassed", actor: "system", timestamp: "2026-06-20T10:02:00Z", detail: "All clear" },
-      { eventType: "ParentWorkflowResumeRequested", actor: "system", timestamp: "2026-06-20T10:02:00Z", detail: "Attempt 1" }
+      {
+        eventType: "InspectionRequested",
+        actor: "system",
+        timestamp: "2026-06-20T10:00:00Z",
+        detail: "Process created"
+      },
+      {
+        eventType: "InspectionTaskCreated",
+        actor: "system",
+        timestamp: "2026-06-20T10:00:00Z",
+        detail: "inspection-test-inspection-1"
+      },
+      {
+        eventType: "InspectionTaskClaimed",
+        actor: "inspectionOfficer",
+        timestamp: "2026-06-20T10:01:00Z",
+        detail: "inspection-test-inspection-1"
+      },
+      {
+        eventType: "InspectionPassed",
+        actor: "system",
+        timestamp: "2026-06-20T10:02:00Z",
+        detail: "All clear"
+      },
+      {
+        eventType: "ParentWorkflowResumeRequested",
+        actor: "system",
+        timestamp: "2026-06-20T10:02:00Z",
+        detail: "Attempt 1"
+      }
     ];
     vi.stubGlobal("fetch", mockFetch(inspectionDetail({ status: "COMPLETED" }), history));
     render(<App />);

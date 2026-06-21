@@ -59,9 +59,11 @@ final class InspectionApplicationServiceTest {
   void claimsAndPassesInspection() {
     InspectionApplicationService service = newService();
     InspectionProcess created = service.requestOrCorrelate(request("create", 1));
-    InspectionProcess claimed = service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
+    InspectionProcess claimed =
+        service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
 
-    InspectionProcess passed = service.completeInspectionPassed(complete(claimed, PASSED, 2, "pass"));
+    InspectionProcess passed =
+        service.completeInspectionPassed(complete(claimed, PASSED, 2, "pass"));
 
     assertEquals(COMPLETED, passed.status());
     assertEquals(PASSED, passed.attempts().get(0).result());
@@ -71,9 +73,11 @@ final class InspectionApplicationServiceTest {
   void claimsAndFailsInspection() {
     InspectionApplicationService service = newService();
     InspectionProcess created = service.requestOrCorrelate(request("create", 1));
-    InspectionProcess claimed = service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
+    InspectionProcess claimed =
+        service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
 
-    InspectionProcess failed = service.completeInspectionFailed(complete(claimed, FAILED, 2, "fail"));
+    InspectionProcess failed =
+        service.completeInspectionFailed(complete(claimed, FAILED, 2, "fail"));
 
     assertEquals(WAITING_FOR_REMEDIATION, failed.status());
     assertEquals(FAILED, failed.attempts().get(0).result());
@@ -91,9 +95,12 @@ final class InspectionApplicationServiceTest {
   void remediationCompletionCreatesReinspectionTask() {
     InspectionApplicationService service = newService();
     InspectionProcess failed = failedProcess(service);
-    InspectionProcess claimed = service.claimRemediation(claim(failed, REMEDIATION_OFFICER, REMEDIATOR, 3, "claim-remediation"));
+    InspectionProcess claimed =
+        service.claimRemediation(
+            claim(failed, REMEDIATION_OFFICER, REMEDIATOR, 3, "claim-remediation"));
 
-    InspectionProcess completed = service.completeRemediation(remediate(claimed, 4, "complete-remediation"));
+    InspectionProcess completed =
+        service.completeRemediation(remediate(claimed, 4, "complete-remediation"));
 
     assertEquals(WAITING_FOR_REINSPECTION, completed.status());
     assertEquals(3, completed.tasks().size());
@@ -103,9 +110,12 @@ final class InspectionApplicationServiceTest {
   void claimsAndCompletesReinspection() {
     InspectionApplicationService service = newService();
     InspectionProcess ready = reinspectionReady(service);
-    InspectionProcess claimed = service.claimReinspection(claim(ready, INSPECTION_OFFICER, INSPECTOR, 5, "claim-reinspection"));
+    InspectionProcess claimed =
+        service.claimReinspection(
+            claim(ready, INSPECTION_OFFICER, INSPECTOR, 5, "claim-reinspection"));
 
-    InspectionProcess completed = service.completeReinspection(complete(claimed, PASSED, 6, "reinspection-pass"));
+    InspectionProcess completed =
+        service.completeReinspection(complete(claimed, PASSED, 6, "reinspection-pass"));
 
     assertEquals(COMPLETED, completed.status());
     assertEquals(2, completed.attempts().size());
@@ -116,7 +126,10 @@ final class InspectionApplicationServiceTest {
     InspectionApplicationService service = newService();
     InspectionProcess created = service.requestOrCorrelate(request("create", 1));
 
-    InspectionProcess cancelled = service.cancel(new CancelInspectionCommand(created.id(), "synthetic reason", metadata(OWNER, PROCESS_OWNER, 1, "cancel")));
+    InspectionProcess cancelled =
+        service.cancel(
+            new CancelInspectionCommand(
+                created.id(), "synthetic reason", metadata(OWNER, PROCESS_OWNER, 1, "cancel")));
 
     assertEquals(CANCELLED, cancelled.status());
   }
@@ -126,14 +139,19 @@ final class InspectionApplicationServiceTest {
     InspectionApplicationService service = newService();
     InspectionProcess created = service.requestOrCorrelate(request("create", 1));
 
-    assertThrows(AuthorizationDeniedException.class, () -> service.claimInspection(claim(created, REMEDIATION_OFFICER, REMEDIATOR, 1, "unauthorized")));
+    assertThrows(
+        AuthorizationDeniedException.class,
+        () ->
+            service.claimInspection(
+                claim(created, REMEDIATION_OFFICER, REMEDIATOR, 1, "unauthorized")));
   }
 
   @Test
   void ignoresEquivalentDuplicateCompletion() {
     InspectionApplicationService service = newService();
     InspectionProcess created = service.requestOrCorrelate(request("create", 1));
-    InspectionProcess claimed = service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
+    InspectionProcess claimed =
+        service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
     CompleteInspectionCommand command = complete(claimed, PASSED, 2, "pass");
     InspectionProcess completed = service.completeInspectionPassed(command);
 
@@ -144,51 +162,93 @@ final class InspectionApplicationServiceTest {
   void rejectsConflictingDuplicateCompletion() {
     InspectionApplicationService service = newService();
     InspectionProcess created = service.requestOrCorrelate(request("create", 1));
-    InspectionProcess claimed = service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
-    InspectionProcess completed = service.completeInspectionFailed(complete(claimed, FAILED, 2, "fail"));
+    InspectionProcess claimed =
+        service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
+    InspectionProcess completed =
+        service.completeInspectionFailed(complete(claimed, FAILED, 2, "fail"));
 
-    assertThrows(ConflictException.class, () -> service.completeInspectionPassed(complete(completed, PASSED, 3, "conflicting-pass")));
+    assertThrows(
+        ConflictException.class,
+        () -> service.completeInspectionPassed(complete(completed, PASSED, 3, "conflicting-pass")));
   }
 
   @Test
   void rejectsExpectedVersionConflict() {
     InspectionApplicationService service = newService();
     InspectionProcess created = service.requestOrCorrelate(request("create", 1));
-    InspectionProcess claimed = service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
+    InspectionProcess claimed =
+        service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
 
-    assertThrows(ConflictException.class, () -> service.completeInspectionPassed(complete(claimed, PASSED, 1, "stale-version")));
+    assertThrows(
+        ConflictException.class,
+        () -> service.completeInspectionPassed(complete(claimed, PASSED, 1, "stale-version")));
   }
 
   private static InspectionProcess failedProcess(InspectionApplicationService service) {
     InspectionProcess created = service.requestOrCorrelate(request("create", 1));
-    InspectionProcess claimed = service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
+    InspectionProcess claimed =
+        service.claimInspection(claim(created, INSPECTION_OFFICER, INSPECTOR, 1, "claim"));
     return service.completeInspectionFailed(complete(claimed, FAILED, 2, "fail"));
   }
 
   private static InspectionProcess reinspectionReady(InspectionApplicationService service) {
     InspectionProcess failed = failedProcess(service);
-    InspectionProcess claimed = service.claimRemediation(claim(failed, REMEDIATION_OFFICER, REMEDIATOR, 3, "claim-remediation"));
+    InspectionProcess claimed =
+        service.claimRemediation(
+            claim(failed, REMEDIATION_OFFICER, REMEDIATOR, 3, "claim-remediation"));
     return service.completeRemediation(remediate(claimed, 4, "complete-remediation"));
   }
 
   private static InspectionRequestCommand request(String causation, int expectedVersion) {
-    return new InspectionRequestCommand(new KeyHandoverRequestId("handover-1"), new PropertyReference("property-1"), "synthetic", metadata(OWNER, PROCESS_OWNER, expectedVersion, causation));
+    return new InspectionRequestCommand(
+        new KeyHandoverRequestId("handover-1"),
+        new PropertyReference("property-1"),
+        "synthetic",
+        metadata(OWNER, PROCESS_OWNER, expectedVersion, causation));
   }
 
-  private static ClaimTaskCommand claim(InspectionProcess process, InspectionRole role, ActorId actor, int expectedVersion, String causation) {
-    return new ClaimTaskCommand(process.id(), process.tasks().get(process.tasks().size() - 1).id(), metadata(actor, role, expectedVersion, causation));
+  private static ClaimTaskCommand claim(
+      InspectionProcess process,
+      InspectionRole role,
+      ActorId actor,
+      int expectedVersion,
+      String causation) {
+    return new ClaimTaskCommand(
+        process.id(),
+        process.tasks().get(process.tasks().size() - 1).id(),
+        metadata(actor, role, expectedVersion, causation));
   }
 
-  private static CompleteInspectionCommand complete(InspectionProcess process, InspectionResult result, int expectedVersion, String causation) {
-    return new CompleteInspectionCommand(process.id(), process.tasks().get(process.tasks().size() - 1).id(), result, "synthetic findings", new EvidenceReference("evidence-" + causation), metadata(INSPECTOR, INSPECTION_OFFICER, expectedVersion, causation));
+  private static CompleteInspectionCommand complete(
+      InspectionProcess process, InspectionResult result, int expectedVersion, String causation) {
+    return new CompleteInspectionCommand(
+        process.id(),
+        process.tasks().get(process.tasks().size() - 1).id(),
+        result,
+        "synthetic findings",
+        new EvidenceReference("evidence-" + causation),
+        metadata(INSPECTOR, INSPECTION_OFFICER, expectedVersion, causation));
   }
 
-  private static CompleteRemediationCommand remediate(InspectionProcess process, int expectedVersion, String causation) {
-    return new CompleteRemediationCommand(process.id(), process.tasks().get(process.tasks().size() - 1).id(), "synthetic resolution", new EvidenceReference("remediation-" + causation), metadata(REMEDIATOR, REMEDIATION_OFFICER, expectedVersion, causation));
+  private static CompleteRemediationCommand remediate(
+      InspectionProcess process, int expectedVersion, String causation) {
+    return new CompleteRemediationCommand(
+        process.id(),
+        process.tasks().get(process.tasks().size() - 1).id(),
+        "synthetic resolution",
+        new EvidenceReference("remediation-" + causation),
+        metadata(REMEDIATOR, REMEDIATION_OFFICER, expectedVersion, causation));
   }
 
-  private static InspectionCommandMetadata metadata(ActorId actor, InspectionRole role, int expectedVersion, String causation) {
-    return new InspectionCommandMetadata(actor, role, new DomainVersion(expectedVersion), new CorrelationId("correlation-" + causation), new CausationId(causation), Instant.parse("2026-01-01T00:00:00Z"));
+  private static InspectionCommandMetadata metadata(
+      ActorId actor, InspectionRole role, int expectedVersion, String causation) {
+    return new InspectionCommandMetadata(
+        actor,
+        role,
+        new DomainVersion(expectedVersion),
+        new CorrelationId("correlation-" + causation),
+        new CausationId(causation),
+        Instant.parse("2026-01-01T00:00:00Z"));
   }
 
   private static InspectionApplicationService newService() {
@@ -204,8 +264,11 @@ final class InspectionApplicationServiceTest {
     }
 
     @Override
-    public Optional<InspectionProcess> findByBusinessKey(InspectionProcess.InspectionBusinessKey businessKey) {
-      return byId.values().stream().filter(process -> process.businessKey().equals(businessKey)).findFirst();
+    public Optional<InspectionProcess> findByBusinessKey(
+        InspectionProcess.InspectionBusinessKey businessKey) {
+      return byId.values().stream()
+          .filter(process -> process.businessKey().equals(businessKey))
+          .findFirst();
     }
 
     @Override
@@ -217,7 +280,8 @@ final class InspectionApplicationServiceTest {
     @Override
     public InspectionProcess commit(InspectionProcess process, DomainVersion expectedVersion) {
       InspectionProcess current = byId.get(process.id());
-      if (current == null || !current.version().equals(expectedVersion)) throw new ConflictException("Inspection process version conflict");
+      if (current == null || !current.version().equals(expectedVersion))
+        throw new ConflictException("Inspection process version conflict");
       byId.put(process.id(), process);
       return process;
     }

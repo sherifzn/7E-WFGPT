@@ -25,14 +25,12 @@ import com.sevenewf.workflow.domain.inspection.InspectionProcess.InspectionProce
 import com.sevenewf.workflow.domain.inspection.InspectionProcess.InspectionResult;
 import com.sevenewf.workflow.domain.inspection.InspectionProcess.InspectionRole;
 import com.sevenewf.workflow.domain.inspection.InspectionProcess.InspectionTask;
-import com.sevenewf.workflow.domain.inspection.InspectionProcess.InspectionTaskStatus;
 import com.sevenewf.workflow.domain.inspection.InspectionProcess.InspectionTaskType;
 import com.sevenewf.workflow.domain.inspection.InspectionProcess.RemediationCycle;
 import com.sevenewf.workflow.domain.inspection.InspectionProcess.RemediationStatus;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.EvidenceReference;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.KeyHandoverRequestId;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.PropertyReference;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -46,7 +44,8 @@ public final class InspectionApplicationService {
   }
 
   public InspectionApplicationService(
-      InspectionProcessStore store, InspectionProcess.LocalInspectionValidityPolicy validityPolicy) {
+      InspectionProcessStore store,
+      InspectionProcess.LocalInspectionValidityPolicy validityPolicy) {
     this.store = Validation.requirePresent(store, "inspectionProcessStore");
     this.validityPolicy = Validation.requirePresent(validityPolicy, "inspectionValidityPolicy");
   }
@@ -112,7 +111,8 @@ public final class InspectionApplicationService {
     if (task.status() == COMPLETED) throw conflict("Remediation task is already completed");
     int cycleNumber = process.remediationCycles().size();
     RemediationCycle cycle = process.remediationCycles().get(cycleNumber - 1);
-    if (cycle.status() != RemediationStatus.IN_PROGRESS) throw conflict("Remediation is not in progress");
+    if (cycle.status() != RemediationStatus.IN_PROGRESS)
+      throw conflict("Remediation is not in progress");
     List<RemediationCycle> cycles = new ArrayList<>(process.remediationCycles());
     cycles.set(
         cycleNumber - 1,
@@ -121,9 +121,17 @@ public final class InspectionApplicationService {
             RemediationStatus.COMPLETED,
             Optional.of(command.resolutionSummary()),
             Optional.of(command.remediationReference())));
-    List<InspectionTask> tasks = completeTask(process.tasks(), task, "REMEDIATION_COMPLETED", command.metadata());
+    List<InspectionTask> tasks =
+        completeTask(process.tasks(), task, "REMEDIATION_COMPLETED", command.metadata());
     tasks.add(inspectionTask(process.id(), process.attempts().size() + 1, command.metadata()));
-    return commit(process, WAITING_FOR_REINSPECTION, process.attempts(), cycles, tasks, Optional.empty(), command.metadata());
+    return commit(
+        process,
+        WAITING_FOR_REINSPECTION,
+        process.attempts(),
+        cycles,
+        tasks,
+        Optional.empty(),
+        command.metadata());
   }
 
   public InspectionProcess completeReinspection(CompleteInspectionCommand command) {
@@ -157,8 +165,8 @@ public final class InspectionApplicationService {
     requireRole(command.metadata(), role);
     InspectionProcess process = requireProcess(command.processId());
     InspectionTask task = requireTask(process, command.taskId(), type);
-    if (task.status() == CLAIMED && task.assignee().filter(command.metadata().actorId()::equals).isPresent())
-      return process;
+    if (task.status() == CLAIMED
+        && task.assignee().filter(command.metadata().actorId()::equals).isPresent()) return process;
     requireVersion(process, command.metadata());
     if (type == InspectionTaskType.INSPECTION
         && reinspection != (process.status() == WAITING_FOR_REINSPECTION))
@@ -171,13 +179,25 @@ public final class InspectionApplicationService {
       cycles = new ArrayList<>(cycles);
       int cycleNumber = cycles.size() - 1;
       RemediationCycle cycle = cycles.get(cycleNumber);
-      if (cycle.status() != RemediationStatus.REQUIRED) throw conflict("Remediation is not available for claim");
-      cycles.set(cycleNumber, new RemediationCycle(cycle.number(), RemediationStatus.IN_PROGRESS, Optional.empty(), Optional.empty()));
+      if (cycle.status() != RemediationStatus.REQUIRED)
+        throw conflict("Remediation is not available for claim");
+      cycles.set(
+          cycleNumber,
+          new RemediationCycle(
+              cycle.number(), RemediationStatus.IN_PROGRESS, Optional.empty(), Optional.empty()));
     }
-    return commit(process, IN_PROGRESS, process.attempts(), cycles, tasks, process.cancellationReason(), command.metadata());
+    return commit(
+        process,
+        IN_PROGRESS,
+        process.attempts(),
+        cycles,
+        tasks,
+        process.cancellationReason(),
+        command.metadata());
   }
 
-  private InspectionProcess completeInspection(CompleteInspectionCommand command, boolean reinspection) {
+  private InspectionProcess completeInspection(
+      CompleteInspectionCommand command, boolean reinspection) {
     requireRole(command.metadata(), INSPECTION_OFFICER);
     InspectionProcess process = requireProcess(command.processId());
     InspectionTask task = requireTask(process, command.taskId(), InspectionTaskType.INSPECTION);
@@ -212,9 +232,18 @@ public final class InspectionApplicationService {
           command.metadata());
     List<RemediationCycle> cycles = new ArrayList<>(process.remediationCycles());
     int cycleNumber = cycles.size() + 1;
-    cycles.add(new RemediationCycle(cycleNumber, RemediationStatus.REQUIRED, Optional.empty(), Optional.empty()));
+    cycles.add(
+        new RemediationCycle(
+            cycleNumber, RemediationStatus.REQUIRED, Optional.empty(), Optional.empty()));
     tasks.add(remediationTask(process.id(), cycleNumber, command.metadata()));
-    return commit(process, WAITING_FOR_REMEDIATION, attempts, cycles, tasks, Optional.empty(), command.metadata());
+    return commit(
+        process,
+        WAITING_FOR_REMEDIATION,
+        attempts,
+        cycles,
+        tasks,
+        Optional.empty(),
+        command.metadata());
   }
 
   private InspectionProcess commit(
@@ -227,27 +256,46 @@ public final class InspectionApplicationService {
       InspectionCommandMetadata metadata) {
     InspectionProcess next =
         new InspectionProcess(
-            process.id(), process.businessKey(), process.parentRequestId(), process.propertyReference(), process.inspectionType(),
-            status, nextVersion(process.version()), attempts, cycles, tasks, cancellationReason,
-            metadata.correlationId(), metadata.causationId(), metadata.commandedAt());
+            process.id(),
+            process.businessKey(),
+            process.parentRequestId(),
+            process.propertyReference(),
+            process.inspectionType(),
+            status,
+            nextVersion(process.version()),
+            attempts,
+            cycles,
+            tasks,
+            cancellationReason,
+            metadata.correlationId(),
+            metadata.causationId(),
+            metadata.commandedAt());
     return store.commit(next, process.version());
   }
 
   private InspectionProcess requireProcess(InspectionProcessId processId) {
-    return store.findById(processId).orElseThrow(() -> new ProcessNotFoundException("Inspection process was not found"));
+    return store
+        .findById(processId)
+        .orElseThrow(() -> new ProcessNotFoundException("Inspection process was not found"));
   }
 
-  private static InspectionTask requireTask(InspectionProcess process, String taskId, InspectionTaskType type) {
-    return process.tasks().stream().filter(task -> task.id().equals(taskId) && task.type() == type).findFirst()
+  private static InspectionTask requireTask(
+      InspectionProcess process, String taskId, InspectionTaskType type) {
+    return process.tasks().stream()
+        .filter(task -> task.id().equals(taskId) && task.type() == type)
+        .findFirst()
         .orElseThrow(() -> conflict("Inspection task was not found"));
   }
 
   private static void requireRole(InspectionCommandMetadata metadata, InspectionRole requiredRole) {
-    if (metadata.actorRole() != requiredRole) throw new AuthorizationDeniedException("Actor is not authorized for inspection action");
+    if (metadata.actorRole() != requiredRole)
+      throw new AuthorizationDeniedException("Actor is not authorized for inspection action");
   }
 
-  private static void requireVersion(InspectionProcess process, InspectionCommandMetadata metadata) {
-    if (!process.version().equals(metadata.expectedProcessVersion())) throw conflict("Inspection process version conflict");
+  private static void requireVersion(
+      InspectionProcess process, InspectionCommandMetadata metadata) {
+    if (!process.version().equals(metadata.expectedProcessVersion()))
+      throw conflict("Inspection process version conflict");
   }
 
   private static void requireClaimedBy(InspectionTask task, ActorId actorId) {
@@ -256,11 +304,14 @@ public final class InspectionApplicationService {
   }
 
   private static void requireResult(CompleteInspectionCommand command, InspectionResult result) {
-    if (command.result() != result) throw conflict("Inspection result does not match the requested command");
+    if (command.result() != result)
+      throw conflict("Inspection result does not match the requested command");
   }
 
-  private static boolean isEquivalentCompletion(InspectionTask task, InspectionCommandMetadata metadata, String outcome) {
-    return task.status() == COMPLETED && task.outcome().filter(outcome::equals).isPresent()
+  private static boolean isEquivalentCompletion(
+      InspectionTask task, InspectionCommandMetadata metadata, String outcome) {
+    return task.status() == COMPLETED
+        && task.outcome().filter(outcome::equals).isPresent()
         && task.causationId().equals(metadata.causationId());
   }
 
@@ -276,25 +327,79 @@ public final class InspectionApplicationService {
     return new DomainVersion(version.value() + 1);
   }
 
-  private static InspectionTask inspectionTask(InspectionProcessId processId, int attemptNumber, InspectionCommandMetadata metadata) {
-    return task(processId.value() + "-inspection-" + attemptNumber, InspectionTaskType.INSPECTION, INSPECTION_OFFICER, metadata);
+  private static InspectionTask inspectionTask(
+      InspectionProcessId processId, int attemptNumber, InspectionCommandMetadata metadata) {
+    return task(
+        processId.value() + "-inspection-" + attemptNumber,
+        InspectionTaskType.INSPECTION,
+        INSPECTION_OFFICER,
+        metadata);
   }
 
-  private static InspectionTask remediationTask(InspectionProcessId processId, int cycleNumber, InspectionCommandMetadata metadata) {
-    return task(processId.value() + "-remediation-" + cycleNumber, InspectionTaskType.REMEDIATION, REMEDIATION_OFFICER, metadata);
+  private static InspectionTask remediationTask(
+      InspectionProcessId processId, int cycleNumber, InspectionCommandMetadata metadata) {
+    return task(
+        processId.value() + "-remediation-" + cycleNumber,
+        InspectionTaskType.REMEDIATION,
+        REMEDIATION_OFFICER,
+        metadata);
   }
 
-  private static InspectionTask task(String id, InspectionTaskType type, InspectionRole role, InspectionCommandMetadata metadata) {
-    return new InspectionTask(id, type, OPEN, role, Optional.empty(), metadata.commandedAt(), Optional.empty(), Optional.empty(), Optional.empty(), new DomainVersion(1), metadata.correlationId(), metadata.causationId());
+  private static InspectionTask task(
+      String id, InspectionTaskType type, InspectionRole role, InspectionCommandMetadata metadata) {
+    return new InspectionTask(
+        id,
+        type,
+        OPEN,
+        role,
+        Optional.empty(),
+        metadata.commandedAt(),
+        Optional.empty(),
+        Optional.empty(),
+        Optional.empty(),
+        new DomainVersion(1),
+        metadata.correlationId(),
+        metadata.causationId());
   }
 
-  private static InspectionTask claimedTask(InspectionTask task, InspectionCommandMetadata metadata) {
-    return new InspectionTask(task.id(), task.type(), CLAIMED, task.requiredRole(), Optional.of(metadata.actorId()), task.createdAt(), Optional.of(metadata.commandedAt()), Optional.empty(), Optional.empty(), nextVersion(task.version()), metadata.correlationId(), metadata.causationId());
+  private static InspectionTask claimedTask(
+      InspectionTask task, InspectionCommandMetadata metadata) {
+    return new InspectionTask(
+        task.id(),
+        task.type(),
+        CLAIMED,
+        task.requiredRole(),
+        Optional.of(metadata.actorId()),
+        task.createdAt(),
+        Optional.of(metadata.commandedAt()),
+        Optional.empty(),
+        Optional.empty(),
+        nextVersion(task.version()),
+        metadata.correlationId(),
+        metadata.causationId());
   }
 
-  private static List<InspectionTask> completeTask(List<InspectionTask> existing, InspectionTask task, String outcome, InspectionCommandMetadata metadata) {
+  private static List<InspectionTask> completeTask(
+      List<InspectionTask> existing,
+      InspectionTask task,
+      String outcome,
+      InspectionCommandMetadata metadata) {
     List<InspectionTask> tasks = new ArrayList<>(existing);
-    tasks.set(tasks.indexOf(task), new InspectionTask(task.id(), task.type(), COMPLETED, task.requiredRole(), task.assignee(), task.createdAt(), task.claimedAt(), Optional.of(metadata.commandedAt()), Optional.of(outcome), nextVersion(task.version()), metadata.correlationId(), metadata.causationId()));
+    tasks.set(
+        tasks.indexOf(task),
+        new InspectionTask(
+            task.id(),
+            task.type(),
+            COMPLETED,
+            task.requiredRole(),
+            task.assignee(),
+            task.createdAt(),
+            task.claimedAt(),
+            Optional.of(metadata.commandedAt()),
+            Optional.of(outcome),
+            nextVersion(task.version()),
+            metadata.correlationId(),
+            metadata.causationId()));
     return tasks;
   }
 
@@ -311,7 +416,8 @@ public final class InspectionApplicationService {
     }
   }
 
-  public record ClaimTaskCommand(InspectionProcessId processId, String taskId, InspectionCommandMetadata metadata) {
+  public record ClaimTaskCommand(
+      InspectionProcessId processId, String taskId, InspectionCommandMetadata metadata) {
     public ClaimTaskCommand {
       Validation.requirePresent(processId, "inspectionProcessId");
       taskId = Validation.requireText(taskId, "inspectionTaskId");
@@ -320,8 +426,12 @@ public final class InspectionApplicationService {
   }
 
   public record CompleteInspectionCommand(
-      InspectionProcessId processId, String taskId, InspectionResult result, String findings,
-      EvidenceReference evidenceReference, InspectionCommandMetadata metadata) {
+      InspectionProcessId processId,
+      String taskId,
+      InspectionResult result,
+      String findings,
+      EvidenceReference evidenceReference,
+      InspectionCommandMetadata metadata) {
     public CompleteInspectionCommand {
       Validation.requirePresent(processId, "inspectionProcessId");
       taskId = Validation.requireText(taskId, "inspectionTaskId");
@@ -333,8 +443,11 @@ public final class InspectionApplicationService {
   }
 
   public record CompleteRemediationCommand(
-      InspectionProcessId processId, String taskId, String resolutionSummary,
-      EvidenceReference remediationReference, InspectionCommandMetadata metadata) {
+      InspectionProcessId processId,
+      String taskId,
+      String resolutionSummary,
+      EvidenceReference remediationReference,
+      InspectionCommandMetadata metadata) {
     public CompleteRemediationCommand {
       Validation.requirePresent(processId, "inspectionProcessId");
       taskId = Validation.requireText(taskId, "inspectionTaskId");
@@ -344,7 +457,8 @@ public final class InspectionApplicationService {
     }
   }
 
-  public record CancelInspectionCommand(InspectionProcessId processId, String reason, InspectionCommandMetadata metadata) {
+  public record CancelInspectionCommand(
+      InspectionProcessId processId, String reason, InspectionCommandMetadata metadata) {
     public CancelInspectionCommand {
       Validation.requirePresent(processId, "inspectionProcessId");
       reason = Validation.requireText(reason, "cancellationReason");

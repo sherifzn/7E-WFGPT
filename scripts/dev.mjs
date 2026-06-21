@@ -84,9 +84,22 @@ async function ensureNoRecordedProcesses() {
 
 async function buildBackend() {
   const buildLog = createWriteStream(resolve(logDirectory, "backend-build.log"), { flags: "w" });
-  const result = await run("mvn", ["-q", `-Dmaven.repo.local=${resolve(localDirectory, "m2")}`, "-pl", "backend", "-am", "package", "-DskipTests"], buildLog);
+  const result = await run(
+    "mvn",
+    [
+      "-q",
+      `-Dmaven.repo.local=${resolve(localDirectory, "m2")}`,
+      "-pl",
+      "backend",
+      "-am",
+      "package",
+      "-DskipTests"
+    ],
+    buildLog
+  );
   buildLog.end();
-  if (result !== 0) throw new Error(`Backend build failed. See ${resolve(logDirectory, "backend-build.log")}`);
+  if (result !== 0)
+    throw new Error(`Backend build failed. See ${resolve(logDirectory, "backend-build.log")}`);
 }
 
 function startBackend() {
@@ -96,7 +109,9 @@ function startBackend() {
       "-Dworkflow.http.port=8080",
       `-Dworkflow.local.data.dir=${dataDirectory}`,
       "-cp",
-      ["backend", "domain", "contracts", "adapters"].map((module) => resolve(rootDirectory, module, "target", "classes")).join(delimiter),
+      ["backend", "domain", "contracts", "adapters"]
+        .map((module) => resolve(rootDirectory, module, "target", "classes"))
+        .join(delimiter),
       "com.sevenewf.workflow.backend.BackendApplication"
     ],
     "backend.log"
@@ -120,7 +135,10 @@ function startFrontend() {
 
 function start(command, argumentsList, logFile) {
   const log = createWriteStream(resolve(logDirectory, logFile), { flags: "w" });
-  const child = spawn(command, argumentsList, { cwd: rootDirectory, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(command, argumentsList, {
+    cwd: rootDirectory,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
   child.stdout.pipe(log);
   child.stderr.pipe(log);
   child.once("error", (error) => {
@@ -128,7 +146,11 @@ function start(command, argumentsList, logFile) {
   });
   child.once("exit", (code) => {
     if (!stopping)
-      void fail(new Error(`${logFile} stopped unexpectedly with code ${code}. See ${resolve(logDirectory, logFile)}`));
+      void fail(
+        new Error(
+          `${logFile} stopped unexpectedly with code ${code}. See ${resolve(logDirectory, logFile)}`
+        )
+      );
   });
   return child;
 }
@@ -162,7 +184,10 @@ async function shutdown() {
   if (stopping) return;
   stopping = true;
   await Promise.all([stop(frontendProcess), stop(backendProcess)]);
-  await Promise.all([unlink(frontendPidPath).catch(() => undefined), unlink(backendPidPath).catch(() => undefined)]);
+  await Promise.all([
+    unlink(frontendPidPath).catch(() => undefined),
+    unlink(backendPidPath).catch(() => undefined)
+  ]);
 }
 
 async function stop(child) {
@@ -180,7 +205,10 @@ async function fail(error) {
 
 function run(command, argumentsList, log) {
   return new Promise((resolvePromise) => {
-    const child = spawn(command, argumentsList, { cwd: rootDirectory, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, argumentsList, {
+      cwd: rootDirectory,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
     child.stdout.pipe(log);
     child.stderr.pipe(log);
     child.once("error", () => resolvePromise(1));

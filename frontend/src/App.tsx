@@ -4,7 +4,7 @@ import {
   InspectionHistoryEvent,
   InspectionProcess,
   InspectionSummary,
-  InspectionTask,
+  InspectionTask
 } from "./inspectionApi";
 import {
   ClearanceTask,
@@ -908,7 +908,7 @@ function InspectionWorkspace({
   busy,
   identity,
   onSelect,
-  onAction,
+  onAction
 }: {
   inspections: InspectionSummary[];
   selectedId: string;
@@ -991,31 +991,33 @@ function InspectionWorkspace({
             <h3>Tasks</h3>
             <div className="task-grid">
               {detail.tasks.map((task) => (
-                  <InspectionTaskCard
-                    key={task.id}
-                    task={task}
-                    process={detail}
-                    busy={busy}
-                    identity={identity}
-                    onAction={onAction}
-                  />
+                <InspectionTaskCard
+                  key={task.id}
+                  task={task}
+                  process={detail}
+                  busy={busy}
+                  identity={identity}
+                  onAction={onAction}
+                />
               ))}
             </div>
           </section>
         )}
         <AuditTimelineInspection history={history} />
-        {identity === "processOwner" && detail.status !== "COMPLETED" && detail.status !== "CANCELLED" && (
-          <button
-            disabled={busy}
-            onClick={() =>
-              onAction(() =>
-                inspectionApi.cancel(detail.id, identity, "Cancelled by process owner")
-              )
-            }
-          >
-            Cancel inspection
-          </button>
-        )}
+        {identity === "processOwner" &&
+          detail.status !== "COMPLETED" &&
+          detail.status !== "CANCELLED" && (
+            <button
+              disabled={busy}
+              onClick={() =>
+                onAction(() =>
+                  inspectionApi.cancel(detail.id, identity, "Cancelled by process owner")
+                )
+              }
+            >
+              Cancel inspection
+            </button>
+          )}
       </section>
     </div>
   ) : (
@@ -1042,7 +1044,7 @@ function InspectionTaskCard({
   process,
   busy,
   identity,
-  onAction,
+  onAction
 }: {
   task: InspectionTask;
   process: InspectionProcess;
@@ -1068,9 +1070,7 @@ function InspectionTaskCard({
       {open && isInspection && canDoInspection && (
         <button
           disabled={busy}
-          onClick={() =>
-            onAction(() => inspectionApi.claimTask(process.id, task.id, actor))
-          }
+          onClick={() => onAction(() => inspectionApi.claimTask(process.id, task.id, actor))}
         >
           Claim inspection
         </button>
@@ -1078,11 +1078,7 @@ function InspectionTaskCard({
       {open && !isInspection && canDoRemediation && (
         <button
           disabled={busy}
-          onClick={() =>
-            onAction(() =>
-              inspectionApi.claimRemediation(process.id, task.id, actor)
-            )
-          }
+          onClick={() => onAction(() => inspectionApi.claimRemediation(process.id, task.id, actor))}
         >
           Claim remediation
         </button>
