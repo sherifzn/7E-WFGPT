@@ -51,7 +51,8 @@ final class KeyHandoverSliceIntegrationTest {
     KeyHandoverState resumed =
         context.service.resumeAfterInspection(context.inspectionAvailable(waiting));
     assertEquals(RequestStatus.CLEARANCE_IN_PROGRESS, resumed.status());
-    assertEquals(3, resumed.branches().size());
+    assertEquals(1, resumed.branches().size());
+    assertTrue(resumed.branches().containsKey(ClearanceBranch.HANDOVER));
     assertEquals(
         resumed, context.service.resumeAfterInspection(context.inspectionAvailable(resumed)));
     assertTrue(context.audit.hasEvent("InspectionAvailable"));
@@ -745,7 +746,9 @@ final class KeyHandoverSliceIntegrationTest {
     assertEquals(Set.of(ClearanceBranch.LEGAL), initialized.holds().getFirst().affectedBranches());
     assertTrue(initialized.authorization().isEmpty());
     assertTrue(initialized.notificationState().isEmpty());
-    assertEquals(ClearanceOutcome.GREEN, initialized.branches().get(ClearanceBranch.HANDOVER).outcome().orElseThrow());
+    assertEquals(
+        ClearanceOutcome.GREEN,
+        initialized.branches().get(ClearanceBranch.HANDOVER).outcome().orElseThrow());
     assertTrue(context.audit.hasEvent("LegacyHoldInitialized"));
     assertEquals(
         initialized,

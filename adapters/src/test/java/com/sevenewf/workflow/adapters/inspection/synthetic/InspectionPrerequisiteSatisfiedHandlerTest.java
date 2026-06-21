@@ -52,8 +52,7 @@ final class InspectionPrerequisiteSatisfiedHandlerTest {
     assertEquals(KeyHandoverTypes.RequestStatus.CLEARANCE_IN_PROGRESS, resumed.status());
     assertFalse(resumed.branches().isEmpty());
     assertTrue(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.HANDOVER));
-    assertTrue(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.FINANCE));
-    assertTrue(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.LEGAL));
+    assertEquals(1, resumed.branches().size());
     assertEquals(1, ctx.eventStore.pendingResumeEvents().size());
     assertTrue(ctx.eventStore.pendingResumeEvents().get(0).handled());
     assertTrue(
@@ -75,9 +74,7 @@ final class InspectionPrerequisiteSatisfiedHandlerTest {
     ctx.handler.drainPendingEvents();
 
     KeyHandoverState resumed = ctx.khStore.findById(waiting.requestId()).orElseThrow();
-    var financeBranch = resumed.branches().get(KeyHandoverTypes.ClearanceBranch.FINANCE);
-    assertEquals(KeyHandoverTypes.BranchStatus.OPEN, financeBranch.status());
-    assertTrue(financeBranch.outcome().isEmpty());
+    assertFalse(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.FINANCE));
   }
 
   @Test
@@ -91,9 +88,7 @@ final class InspectionPrerequisiteSatisfiedHandlerTest {
     ctx.handler.drainPendingEvents();
 
     KeyHandoverState resumed = ctx.khStore.findById(waiting.requestId()).orElseThrow();
-    var legalBranch = resumed.branches().get(KeyHandoverTypes.ClearanceBranch.LEGAL);
-    assertEquals(KeyHandoverTypes.BranchStatus.OPEN, legalBranch.status());
-    assertTrue(legalBranch.outcome().isEmpty());
+    assertFalse(resumed.branches().containsKey(KeyHandoverTypes.ClearanceBranch.LEGAL));
   }
 
   @Test
@@ -206,6 +201,242 @@ final class InspectionPrerequisiteSatisfiedHandlerTest {
     assertTrue(
         ctx.audit.records().stream()
             .noneMatch(a -> a.eventType().equals("ParentWorkflowResumeRequested")));
+  }
+
+  @Test
+  void preservesCompletedFinanceAndLegalBranches() throws Exception {
+    Path snapshot = Files.createTempFile("inspection-handler", ".snapshot");
+    HandlerContext ctx = new HandlerContext("preserve-completed", snapshot);
+    KeyHandoverState waiting = ctx.submitToInspection();
+
+    var financePolicy = ctx.policies.taskPolicies().get(KeyHandoverTypes.ClearanceBranch.FINANCE);
+    var legalPolicy = ctx.policies.taskPolicies().get(KeyHandoverTypes.ClearanceBranch.LEGAL);
+    var financeBranch =
+        new KeyHandoverTypes.BranchState(
+            KeyHandoverTypes.ClearanceBranch.FINANCE,
+            KeyHandoverTypes.BranchStatus.COMPLETED,
+            financePolicy,
+            Optional.of(new ActorId("finance-officer")),
+            Optional.of(new ActorId("finance-officer")),
+            Optional.of(KeyHandoverTypes.ClearanceOutcome.GREEN),
+            List.of(new KeyHandoverTypes.EvidenceReference("finance-evidence")),
+            START,
+            Optional.empty(),
+            Optional.empty());
+    var legalBranch =
+        new KeyHandoverTypes.BranchState(
+            KeyHandoverTypes.ClearanceBranch.LEGAL,
+            KeyHandoverTypes.BranchStatus.COMPLETED,
+            legalPolicy,
+            Optional.of(new ActorId("legal-officer")),
+            Optional.of(new ActorId("legal-officer")),
+            Optional.of(KeyHandoverTypes.ClearanceOutcome.GREEN),
+            List.of(new KeyHandoverTypes.EvidenceReference("legal-evidence")),
+            START,
+            Optional.empty(),
+            Optional.empty());
+    Map<KeyHandoverTypes.ClearanceBranch, KeyHandoverTypes.BranchState> branches =
+        new EnumMap<>(KeyHandoverTypes.ClearanceBranch.class);
+    branches.put(KeyHandoverTypes.ClearanceBranch.FINANCE, financeBranch);
+    branches.put(KeyHandoverTypes.ClearanceBranch.LEGAL, legalBranch);
+
+    var withBranches =
+        new KeyHandoverState(
+            waiting.requestId(),
+            new DomainVersion(2),
+            waiting.businessKey(),
+            waiting.propertyReference(),
+            waiting.ownerReference(),
+            KeyHandoverTypes.RequestStatus.WAITING_FOR_INSPECTION,
+            waiting.inspectionStatus(),
+            waiting.inspectionChildWorkflowId(),
+            branches,
+            waiting.finalDecision(),
+            waiting.exceptionDecision(),
+            waiting.authorization(),
+            waiting.notificationState(),
+            waiting.holds(),
+            START);
+    ctx.khStore.commit(withBranches, waiting.stateVersion(), List.of());
+
+    InspectionProcess passed = ctx.createPassedInspection(waiting.requestId());
+    ctx.eventStore.appendPendingResumeEvent(pendingEvent(passed, false));
+    ctx.handler.drainPendingEvents();
+
+    KeyHandoverState resumed = ctx.khStore.findById(waiting.requestId()).orElseThrow();
+    assertEquals(KeyHandoverTypes.RequestStatus.CLEARANCE_IN_PROGRESS, resumed.status());
+    assertEquals(3, resumed.branches().size());
+    var resumedFinance = resumed.branches().get(KeyHandoverTypes.ClearanceBranch.FINANCE);
+    assertEquals(KeyHandoverTypes.BranchStatus.COMPLETED, resumedFinance.status());
+    assertEquals(KeyHandoverTypes.ClearanceOutcome.GREEN, resumedFinance.outcome().orElseThrow());
+    assertEquals(new ActorId("finance-officer"), resumedFinance.assignedTo().orElseThrow());
+    var resumedLegal = resumed.branches().get(KeyHandoverTypes.ClearanceBranch.LEGAL);
+    assertEquals(KeyHandoverTypes.BranchStatus.COMPLETED, resumedLegal.status());
+    assertEquals(KeyHandoverTypes.ClearanceOutcome.GREEN, resumedLegal.outcome().orElseThrow());
+    var resumedHandover = resumed.branches().get(KeyHandoverTypes.ClearanceBranch.HANDOVER);
+    assertEquals(KeyHandoverTypes.BranchStatus.OPEN, resumedHandover.status());
+  }
+
+  @Test
+  void preservesInProgressFinanceAndCompletedLegal() throws Exception {
+    Path snapshot = Files.createTempFile("inspection-handler", ".snapshot");
+    HandlerContext ctx = new HandlerContext("preserve-inprogress", snapshot);
+    KeyHandoverState waiting = ctx.submitToInspection();
+
+    var financePolicy = ctx.policies.taskPolicies().get(KeyHandoverTypes.ClearanceBranch.FINANCE);
+    var legalPolicy = ctx.policies.taskPolicies().get(KeyHandoverTypes.ClearanceBranch.LEGAL);
+    var financeBranch =
+        new KeyHandoverTypes.BranchState(
+            KeyHandoverTypes.ClearanceBranch.FINANCE,
+            KeyHandoverTypes.BranchStatus.CLAIMED,
+            financePolicy,
+            Optional.of(new ActorId("finance-officer")),
+            Optional.empty(),
+            Optional.empty(),
+            List.of(),
+            START,
+            Optional.empty(),
+            Optional.empty());
+    var legalBranch =
+        new KeyHandoverTypes.BranchState(
+            KeyHandoverTypes.ClearanceBranch.LEGAL,
+            KeyHandoverTypes.BranchStatus.COMPLETED,
+            legalPolicy,
+            Optional.of(new ActorId("legal-officer")),
+            Optional.of(new ActorId("legal-officer")),
+            Optional.of(KeyHandoverTypes.ClearanceOutcome.GREEN),
+            List.of(new KeyHandoverTypes.EvidenceReference("legal-evidence")),
+            START,
+            Optional.empty(),
+            Optional.empty());
+    Map<KeyHandoverTypes.ClearanceBranch, KeyHandoverTypes.BranchState> branches =
+        new EnumMap<>(KeyHandoverTypes.ClearanceBranch.class);
+    branches.put(KeyHandoverTypes.ClearanceBranch.FINANCE, financeBranch);
+    branches.put(KeyHandoverTypes.ClearanceBranch.LEGAL, legalBranch);
+
+    var withBranches =
+        new KeyHandoverState(
+            waiting.requestId(),
+            new DomainVersion(2),
+            waiting.businessKey(),
+            waiting.propertyReference(),
+            waiting.ownerReference(),
+            KeyHandoverTypes.RequestStatus.WAITING_FOR_INSPECTION,
+            waiting.inspectionStatus(),
+            waiting.inspectionChildWorkflowId(),
+            branches,
+            waiting.finalDecision(),
+            waiting.exceptionDecision(),
+            waiting.authorization(),
+            waiting.notificationState(),
+            waiting.holds(),
+            START);
+    ctx.khStore.commit(withBranches, waiting.stateVersion(), List.of());
+
+    InspectionProcess passed = ctx.createPassedInspection(waiting.requestId());
+    ctx.eventStore.appendPendingResumeEvent(pendingEvent(passed, false));
+    ctx.handler.drainPendingEvents();
+
+    KeyHandoverState resumed = ctx.khStore.findById(waiting.requestId()).orElseThrow();
+    var resumedFinance = resumed.branches().get(KeyHandoverTypes.ClearanceBranch.FINANCE);
+    assertEquals(KeyHandoverTypes.BranchStatus.CLAIMED, resumedFinance.status());
+    assertEquals(new ActorId("finance-officer"), resumedFinance.assignedTo().orElseThrow());
+    var resumedLegal = resumed.branches().get(KeyHandoverTypes.ClearanceBranch.LEGAL);
+    assertEquals(KeyHandoverTypes.BranchStatus.COMPLETED, resumedLegal.status());
+    assertEquals(KeyHandoverTypes.ClearanceOutcome.GREEN, resumedLegal.outcome().orElseThrow());
+  }
+
+  @Test
+  void repeatedResumeIsIdempotentAndPreservesBranches() throws Exception {
+    Path snapshot = Files.createTempFile("inspection-handler", ".snapshot");
+    HandlerContext ctx = new HandlerContext("idempotent-branches", snapshot);
+    KeyHandoverState waiting = ctx.submitToInspection();
+
+    var financePolicy = ctx.policies.taskPolicies().get(KeyHandoverTypes.ClearanceBranch.FINANCE);
+    var financeBranch =
+        new KeyHandoverTypes.BranchState(
+            KeyHandoverTypes.ClearanceBranch.FINANCE,
+            KeyHandoverTypes.BranchStatus.COMPLETED,
+            financePolicy,
+            Optional.of(new ActorId("finance-officer")),
+            Optional.of(new ActorId("finance-officer")),
+            Optional.of(KeyHandoverTypes.ClearanceOutcome.GREEN),
+            List.of(new KeyHandoverTypes.EvidenceReference("finance-evidence")),
+            START,
+            Optional.empty(),
+            Optional.empty());
+    Map<KeyHandoverTypes.ClearanceBranch, KeyHandoverTypes.BranchState> branches =
+        new EnumMap<>(KeyHandoverTypes.ClearanceBranch.class);
+    branches.put(KeyHandoverTypes.ClearanceBranch.FINANCE, financeBranch);
+
+    var withBranches =
+        new KeyHandoverState(
+            waiting.requestId(),
+            new DomainVersion(2),
+            waiting.businessKey(),
+            waiting.propertyReference(),
+            waiting.ownerReference(),
+            KeyHandoverTypes.RequestStatus.WAITING_FOR_INSPECTION,
+            waiting.inspectionStatus(),
+            waiting.inspectionChildWorkflowId(),
+            branches,
+            waiting.finalDecision(),
+            waiting.exceptionDecision(),
+            waiting.authorization(),
+            waiting.notificationState(),
+            waiting.holds(),
+            START);
+    ctx.khStore.commit(withBranches, waiting.stateVersion(), List.of());
+
+    InspectionProcess passed = ctx.createPassedInspection(waiting.requestId());
+    PendingResumeEvent event = pendingEvent(passed, false);
+    ctx.eventStore.appendPendingResumeEvent(event);
+    ctx.eventStore.appendPendingResumeEvent(event);
+
+    ctx.handler.drainPendingEvents();
+
+    KeyHandoverState resumed = ctx.khStore.findById(waiting.requestId()).orElseThrow();
+    assertEquals(KeyHandoverTypes.RequestStatus.CLEARANCE_IN_PROGRESS, resumed.status());
+    var resumedFinance = resumed.branches().get(KeyHandoverTypes.ClearanceBranch.FINANCE);
+    assertEquals(KeyHandoverTypes.ClearanceOutcome.GREEN, resumedFinance.outcome().orElseThrow());
+  }
+
+  @Test
+  void terminalParentIsNotMutated() throws Exception {
+    Path snapshot = Files.createTempFile("inspection-handler", ".snapshot");
+    HandlerContext ctx = new HandlerContext("terminal-parent", snapshot);
+    KeyHandoverState waiting = ctx.submitToInspection();
+
+    var cancelled =
+        new KeyHandoverState(
+            waiting.requestId(),
+            new DomainVersion(2),
+            waiting.businessKey(),
+            waiting.propertyReference(),
+            waiting.ownerReference(),
+            KeyHandoverTypes.RequestStatus.CANCELLED,
+            waiting.inspectionStatus(),
+            waiting.inspectionChildWorkflowId(),
+            waiting.branches(),
+            waiting.finalDecision(),
+            waiting.exceptionDecision(),
+            waiting.authorization(),
+            waiting.notificationState(),
+            waiting.holds(),
+            START);
+    ctx.khStore.commit(cancelled, waiting.stateVersion(), List.of());
+
+    InspectionProcess passed = ctx.createPassedInspection(waiting.requestId());
+    ctx.eventStore.appendPendingResumeEvent(pendingEvent(passed, false));
+    ctx.handler.drainPendingEvents();
+
+    KeyHandoverState stillCancelled = ctx.khStore.findById(waiting.requestId()).orElseThrow();
+    assertEquals(KeyHandoverTypes.RequestStatus.CANCELLED, stillCancelled.status());
+    assertEquals(0, stillCancelled.branches().size());
+    assertFalse(ctx.eventStore.pendingResumeEvents().get(0).handled());
+    assertTrue(
+        ctx.khStore.pendingAudits().stream()
+            .anyMatch(a -> a.eventType().equals("ParentResumeFailed")));
   }
 
   private static final class HandlerContext {

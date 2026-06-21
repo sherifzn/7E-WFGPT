@@ -189,7 +189,7 @@ public final class KeyHandoverApplicationService {
             RequestStatus.CLEARANCE_IN_PROGRESS,
             valid,
             state.inspectionChildWorkflowId(),
-            openBranches(clock.now()),
+            branchesWithHandoverOpened(state, clock.now()),
             state.finalDecision(),
             state.authorization(),
             state.notificationState());
@@ -206,7 +206,7 @@ public final class KeyHandoverApplicationService {
                 List.of(command.inspectionEvidence()),
                 Map.of()),
             audit(
-                "ClearanceTasksOpened",
+                "HandoverTaskOpened",
                 next,
                 command.actor().actorId(),
                 command.correlationId(),
@@ -582,7 +582,8 @@ public final class KeyHandoverApplicationService {
       return state;
     }
     if (notification.status() != NotificationDeliveryStatus.FAILED)
-      throw new ValidationFailedException("Notification retry is not available for this request state");
+      throw new ValidationFailedException(
+          "Notification retry is not available for this request state");
     if (notification.attemptCount() >= policies.maxConnectorAttempts()) {
       KeyHandoverState exhausted =
           next(
@@ -1066,8 +1067,7 @@ public final class KeyHandoverApplicationService {
             .collect(java.util.stream.Collectors.toUnmodifiableSet());
     if (affectedBranches.isEmpty()) return state;
     Instant startedAt = clock.now();
-    int cycleNumber =
-        state.holds().stream().mapToInt(HoldRecord::cycleNumber).max().orElse(0) + 1;
+    int cycleNumber = state.holds().stream().mapToInt(HoldRecord::cycleNumber).max().orElse(0) + 1;
     HoldRecord hold =
         new HoldRecord(
             new HoldId("hold-" + state.requestId().value() + "-" + cycleNumber),
@@ -1110,7 +1110,10 @@ public final class KeyHandoverApplicationService {
                     "holdId",
                     hold.holdId().value(),
                     "affectedBranches",
-                    affectedBranches.stream().map(Enum::name).sorted().collect(java.util.stream.Collectors.joining(",")),
+                    affectedBranches.stream()
+                        .map(Enum::name)
+                        .sorted()
+                        .collect(java.util.stream.Collectors.joining(",")),
                     "policyVersion",
                     hold.policyReference().value(),
                     "previousState",
@@ -1538,6 +1541,17 @@ public final class KeyHandoverApplicationService {
     Map<ClearanceBranch, BranchState> branches = new EnumMap<>(ClearanceBranch.class);
     for (ClearanceBranch branch : ClearanceBranch.values())
       branches.put(branch, openBranch(branch, now));
+    return branches;
+  }
+
+  private Map<ClearanceBranch, BranchState> branchesWithHandoverOpened(
+      KeyHandoverState state, Instant now) {
+    Map<ClearanceBranch, BranchState> branches = new EnumMap<>(ClearanceBranch.class);
+    if (state.branches().containsKey(ClearanceBranch.FINANCE))
+      branches.put(ClearanceBranch.FINANCE, state.branches().get(ClearanceBranch.FINANCE));
+    if (state.branches().containsKey(ClearanceBranch.LEGAL))
+      branches.put(ClearanceBranch.LEGAL, state.branches().get(ClearanceBranch.LEGAL));
+    branches.put(ClearanceBranch.HANDOVER, openBranch(ClearanceBranch.HANDOVER, now));
     return branches;
   }
 
