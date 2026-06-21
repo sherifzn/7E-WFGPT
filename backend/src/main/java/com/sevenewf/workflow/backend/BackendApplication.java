@@ -1,6 +1,7 @@
 package com.sevenewf.workflow.backend;
 
 import com.sevenewf.workflow.backend.health.HealthEndpoint;
+import com.sevenewf.workflow.backend.inspection.InspectionDemoHttpHandler;
 import com.sevenewf.workflow.backend.keyhandover.KeyHandoverDemoHttpHandler;
 import com.sevenewf.workflow.backend.logging.StructuredLogger;
 import com.sun.net.httpserver.HttpServer;
@@ -20,6 +21,7 @@ public final class BackendApplication {
     server.createContext("/health", new HealthEndpoint());
     server.createContext("/api/health", new HealthEndpoint());
     server.createContext("/api/key-handovers", new KeyHandoverDemoHttpHandler(dataDirectory));
+    server.createContext("/api/inspections", new InspectionDemoHttpHandler(dataDirectory));
     server.start();
     LOGGER.info("backend_started", "port=" + port);
   }

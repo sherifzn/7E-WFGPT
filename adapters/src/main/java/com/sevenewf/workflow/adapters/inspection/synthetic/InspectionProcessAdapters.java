@@ -68,6 +68,12 @@ public final class InspectionProcessAdapters {
       return process;
     }
 
+    public List<InspectionProcess> listAll() {
+      return byId.values().stream()
+          .sorted(java.util.Comparator.comparing(InspectionProcess::updatedAt).reversed())
+          .toList();
+    }
+
     protected void afterMutation() {}
   }
 

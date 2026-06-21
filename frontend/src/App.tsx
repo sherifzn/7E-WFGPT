@@ -1,5 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  inspectionApi,
+  InspectionProcess,
+  InspectionSummary,
+  InspectionTask,
+} from "./inspectionApi";
+import {
   ClearanceTask,
   DevelopmentIdentity,
   keyHandoverApi,
@@ -8,7 +14,7 @@ import {
 } from "./keyHandoverDemo";
 import "./styles.css";
 
-type View = "requests" | "new-request";
+type View = "requests" | "new-request" | "inspections";
 const statusClass = (status: string) => status.toLowerCase().replaceAll(" ", "-");
 const finalState = (request: KeyHandoverRequest) => request.status;
 const identities: { value: DevelopmentIdentity; label: string }[] = [
@@ -30,6 +36,9 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [identity, setIdentity] = useState<DevelopmentIdentity>("requester");
+  const [inspections, setInspections] = useState<InspectionSummary[]>([]);
+  const [selectedInspectionId, setSelectedInspectionId] = useState("");
+  const [inspectionDetail, setInspectionDetail] = useState<InspectionProcess | null>(null);
 
   const selected = useMemo(
     () => requests.find((request) => request.requestNumber === selectedNumber) ?? requests[0],
@@ -59,6 +68,39 @@ export function App() {
   useEffect(() => {
     void load();
   }, []);
+  useEffect(() => {
+    if (view === "inspections") void loadInspections();
+  }, [view]);
+  const loadInspections = async () => {
+    try {
+      const list = await inspectionApi.list();
+      setInspections(list);
+    } catch {
+      setInspections([]);
+    }
+  };
+  const selectInspection = async (id: string) => {
+    setSelectedInspectionId(id);
+    try {
+      setInspectionDetail(await inspectionApi.get(id));
+    } catch (e) {
+      setInspectionDetail(null);
+      setMessage(e instanceof Error ? e.message : "Failed to load inspection.");
+    }
+  };
+  const inspAction = async (fn: () => Promise<InspectionProcess>) => {
+    setBusy(true);
+    try {
+      const updated = await fn();
+      setInspectionDetail(updated);
+      void loadInspections();
+      setMessage("");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Action failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
   const perform = async (path: string, parameters: Record<string, string> = {}) => {
     if (!selected) return;
     setBusy(true);
@@ -120,6 +162,12 @@ export function App() {
           >
             New request
           </button>
+          <button
+            className={view === "inspections" ? "nav-link active" : "nav-link"}
+            onClick={() => setView("inspections")}
+          >
+            Inspections
+          </button>
         </nav>
         <div className="demo-notice">
           <strong>Local demo</strong>
@@ -151,7 +199,16 @@ export function App() {
             {message}
           </p>
         )}
-        {view === "new-request" ? (
+        {view === "inspections" ? (
+          <InspectionWorkspace
+            inspections={inspections}
+            selectedId={selectedInspectionId}
+            detail={inspectionDetail}
+            busy={busy}
+            onSelect={selectInspection}
+            onAction={inspAction}
+          />
+        ) : view === "new-request" ? (
           <NewRequest
             property={propertyReference}
             owner={ownerReference}
@@ -806,6 +863,262 @@ function AuditTimeline({ request }: { request: KeyHandoverRequest }) {
                 </div>
               </li>
             ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+function InspectionWorkspace({
+  inspections,
+  selectedId,
+  detail,
+  busy,
+  onSelect,
+  onAction,
+}: {
+  inspections: InspectionSummary[];
+  selectedId: string;
+  detail: InspectionProcess | null;
+  busy: boolean;
+  onSelect: (id: string) => void;
+  onAction: (fn: () => Promise<InspectionProcess>) => void;
+}) {
+  return (
+    <div className="request-layout">
+      <section className="request-list-panel" aria-label="Inspection processes">
+        <p className="eyebrow">Inspection processes</p>
+        <h2>Active and recent</h2>
+        {inspections.length === 0 && <p>No inspection processes yet.</p>}
+        {inspections.map((insp) => (
+          <button
+            key={insp.id}
+            className={`request-row${insp.id === selectedId ? " selected" : ""}`}
+            onClick={() => onSelect(insp.id)}
+          >
+            <span className="request-number">{insp.id}</span>
+            <span className="request-property">{insp.parentRequestId}</span>
+            <span className={statusClass(insp.status)}>{insp.status}</span>
+          </button>
+        ))}
+      </section>
+      {detail && (
+        <section className="detail-panel" aria-label="Inspection detail">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Inspection process</p>
+              <h2>{detail.id}</h2>
+            </div>
+            <span className={`status ${statusClass(detail.status)}`}>{detail.status}</span>
+          </div>
+          <div className="summary-grid">
+            <div>
+              <strong>Parent</strong>
+              <span>{detail.parentRequestId}</span>
+            </div>
+            <div>
+              <strong>Property</strong>
+              <span>{detail.propertyReference}</span>
+            </div>
+            <div>
+              <strong>Type</strong>
+              <span>{detail.inspectionType}</span>
+            </div>
+          </div>
+          {detail.cancellationReason && (
+            <p className="form-message" role="alert">
+              Cancelled: {detail.cancellationReason}
+            </p>
+          )}
+          {detail.attempts.length > 0 && (
+            <section className="inspection-section">
+              <h3>Inspection attempts</h3>
+              {detail.attempts.map((a) => (
+                <p key={a.number} className="inspection-action">
+                  Attempt {a.number}: {a.result} — {a.findings}
+                  {a.validUntil && <> (valid until {a.validUntil})</>}
+                </p>
+              ))}
+            </section>
+          )}
+          {detail.remediationCycles.length > 0 && (
+            <section className="inspection-section">
+              <h3>Remediation cycles</h3>
+              {detail.remediationCycles.map((c) => (
+                <p key={c.number} className="inspection-action">
+                  Cycle {c.number}: {c.status}
+                  {c.resolutionSummary && <> — {c.resolutionSummary}</>}
+                </p>
+              ))}
+            </section>
+          )}
+          {detail.tasks.length > 0 && (
+            <section className="inspection-section">
+              <h3>Tasks</h3>
+              <div className="task-grid">
+                {detail.tasks.map((task) => (
+                  <InspectionTaskCard
+                    key={task.id}
+                    task={task}
+                    process={detail}
+                    busy={busy}
+                    onAction={onAction}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+          <AuditTimelineInspection detail={detail} />
+        </section>
+      )}
+    </div>
+  );
+}
+function InspectionTaskCard({
+  task,
+  process,
+  busy,
+  onAction,
+}: {
+  task: InspectionTask;
+  process: InspectionProcess;
+  busy: boolean;
+  onAction: (fn: () => Promise<InspectionProcess>) => void;
+}) {
+  const open = task.status === "OPEN";
+  const claimed = task.status === "CLAIMED";
+  const isInspection = task.type === "INSPECTION";
+  return (
+    <article className="task-card">
+      <div className="task-card-heading">
+        <span>{task.type}</span>
+        <span className={`status ${statusClass(task.status)}`}>{task.status}</span>
+      </div>
+      <p className="task-id">{task.id}</p>
+      {task.assignee && <p>Assignee: {task.assignee}</p>}
+      {task.outcome && <p>Outcome: {task.outcome}</p>}
+      {open && isInspection && (
+        <button
+          disabled={busy}
+          onClick={() =>
+            onAction(() => inspectionApi.claimTask(process.id, task.id, "inspection-officer"))
+          }
+        >
+          Claim inspection
+        </button>
+      )}
+      {open && !isInspection && (
+        <button
+          disabled={busy}
+          onClick={() =>
+            onAction(() =>
+              inspectionApi.claimRemediation(process.id, task.id, "remediation-officer")
+            )
+          }
+        >
+          Claim remediation
+        </button>
+      )}
+      {claimed && isInspection && (
+        <>
+          <button
+            disabled={busy}
+            onClick={() =>
+              onAction(() =>
+                inspectionApi.completePassed(
+                  process.id,
+                  task.id,
+                  "inspection-officer",
+                  "All clear",
+                  "evidence-passed"
+                )
+              )
+            }
+          >
+            Complete PASSED
+          </button>
+          <button
+            disabled={busy}
+            onClick={() =>
+              onAction(() =>
+                inspectionApi.completeFailed(
+                  process.id,
+                  task.id,
+                  "inspection-officer",
+                  "Issues found",
+                  "evidence-failed"
+                )
+              )
+            }
+          >
+            Complete FAILED
+          </button>
+        </>
+      )}
+      {claimed && !isInspection && (
+        <button
+          disabled={busy}
+          onClick={() =>
+            onAction(() =>
+              inspectionApi.completeRemediation(
+                process.id,
+                task.id,
+                "remediation-officer",
+                "All issues resolved",
+                "remediation-evid"
+              )
+            )
+          }
+        >
+          Complete remediation
+        </button>
+      )}
+    </article>
+  );
+}
+function AuditTimelineInspection({ detail }: { detail: InspectionProcess }) {
+  const [expanded, setExpanded] = useState(true);
+  const events = [
+    ...detail.attempts.map((a) => ({
+      type: `Inspection ${a.result}`,
+      detail: a.findings,
+      time: a.completedAt,
+    })),
+    ...detail.remediationCycles.map((c) => ({
+      type: `Remediation ${c.status}`,
+      detail: c.resolutionSummary ?? "",
+      time: "",
+    })),
+  ];
+  return (
+    <section className="audit-panel" aria-labelledby="insp-audit-title">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Audit timeline</p>
+          <h2 id="insp-audit-title">Activity history</h2>
+        </div>
+        <div className="history-controls">
+          <span>{events.length} events</span>
+          <button
+            className="quiet"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((cur) => !cur)}
+          >
+            {expanded ? "Collapse history" : "Expand history"}
+          </button>
+        </div>
+      </div>
+      {expanded && (
+        <ol>
+          {events.reverse().map((e, i) => (
+            <li key={i}>
+              <span className="timeline-dot" />
+              <div>
+                <strong>{e.type}</strong>
+                <p>{e.detail}</p>
+                {e.time && <small>{e.time}</small>}
+              </div>
+            </li>
+          ))}
         </ol>
       )}
     </section>

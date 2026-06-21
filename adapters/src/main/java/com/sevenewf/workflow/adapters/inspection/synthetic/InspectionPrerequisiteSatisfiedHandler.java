@@ -17,6 +17,7 @@ import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.Actor;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.AuditRecord;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.InspectionAvailable;
 import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.KeyHandoverRequestId;
+import com.sevenewf.workflow.domain.keyhandover.KeyHandoverTypes.RequestStatus;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -116,7 +117,24 @@ public final class InspectionPrerequisiteSatisfiedHandler {
                   exception.getClass().getSimpleName(),
                   "inspectionProcessId",
                   event.processId().value())));
+      if (isPermanentFailure(parentId)) {
+        pendingEventStore.markResumeEventHandled(event);
+      }
     }
+  }
+
+  private boolean isPermanentFailure(KeyHandoverRequestId parentId) {
+    return keyHandoverStore
+        .findById(parentId)
+        .map(state -> isTerminalParentStatus(state.status()))
+        .orElse(true);
+  }
+
+  private static boolean isTerminalParentStatus(RequestStatus status) {
+    return status == RequestStatus.CANCELLED
+        || status == RequestStatus.HOLD_REJECTED
+        || status == RequestStatus.AUTHORIZED
+        || status == RequestStatus.EXCEPTION_REJECTED;
   }
 
   static CausationId causation(

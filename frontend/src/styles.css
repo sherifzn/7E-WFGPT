@@ -665,3 +665,47 @@ h3 {
     border-bottom: 1px solid #edf1f6;
   }
 }
+
+/* Inspection workspace */
+.inspection-section {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #edf1f6;
+}
+.inspection-section h3 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #5f7184;
+  margin-bottom: 0.5rem;
+}
+.inspection-action {
+  font-size: 0.875rem;
+  padding: 0.25rem 0;
+  color: #13233a;
+}
+.task-card button {
+  display: block;
+  width: 100%;
+  margin-top: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+  border: 1px solid #cdd6e2;
+  border-radius: 6px;
+  background: #f3f6fb;
+  color: #13233a;
+  cursor: pointer;
+}
+.task-card button:hover:not(:disabled) {
+  background: #dee5ef;
+}
+.task-card button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.task-id {
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: #5f7184;
+  word-break: break-all;
+}

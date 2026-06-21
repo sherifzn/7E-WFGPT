@@ -429,11 +429,10 @@ final class InspectionPrerequisiteSatisfiedHandlerTest {
     InspectionProcess passed = ctx.createPassedInspection(waiting.requestId());
     ctx.eventStore.appendPendingResumeEvent(pendingEvent(passed, false));
     ctx.handler.drainPendingEvents();
-
     KeyHandoverState stillCancelled = ctx.khStore.findById(waiting.requestId()).orElseThrow();
     assertEquals(KeyHandoverTypes.RequestStatus.CANCELLED, stillCancelled.status());
     assertEquals(0, stillCancelled.branches().size());
-    assertFalse(ctx.eventStore.pendingResumeEvents().get(0).handled());
+    assertTrue(ctx.eventStore.pendingResumeEvents().get(0).handled());
     assertTrue(
         ctx.khStore.pendingAudits().stream()
             .anyMatch(a -> a.eventType().equals("ParentResumeFailed")));
