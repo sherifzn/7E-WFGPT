@@ -55,7 +55,8 @@ final class WorkflowDefinitionFixtures {
     StartActivity start =
         new StartActivity("start", "Start", "", null, null, null, null, null, Map.of());
     ParallelSplitActivity split =
-        new ParallelSplitActivity("split", "Split", "", null, null, null, null, null, Map.of());
+        new ParallelSplitActivity(
+            "split", "Split", "", null, null, null, null, null, Map.of(), "pair-1");
     HumanTaskActivity branchA =
         new HumanTaskActivity(
             "branchA",
@@ -91,7 +92,8 @@ final class WorkflowDefinitionFixtures {
             null,
             null);
     ParallelJoinActivity join =
-        new ParallelJoinActivity("join", "Join", "", null, null, null, null, null, Map.of());
+        new ParallelJoinActivity(
+            "join", "Join", "", null, null, null, null, null, Map.of(), "pair-1");
     EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
 
     return new WorkflowDefinition(
@@ -229,7 +231,7 @@ final class WorkflowDefinitionFixtures {
         new StartActivity("start", "Start", "", null, null, null, null, null, Map.of());
     ParallelSplitActivity split =
         new ParallelSplitActivity(
-            "split", "Parallel Split", "", null, null, null, null, null, Map.of());
+            "split", "Parallel Split", "", null, null, null, null, null, Map.of(), "pair-1");
     HumanTaskActivity finance =
         new HumanTaskActivity(
             "finance",
@@ -300,7 +302,7 @@ final class WorkflowDefinitionFixtures {
             null);
     ParallelJoinActivity join =
         new ParallelJoinActivity(
-            "join", "Parallel Join", "", null, null, null, null, null, Map.of());
+            "join", "Parallel Join", "", null, null, null, null, null, Map.of(), "pair-1");
     DecisionActivity decision =
         new DecisionActivity(
             "decision",

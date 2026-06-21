@@ -139,7 +139,8 @@ public final class WorkflowDefinitionValidator {
                 workflowKey,
                 transition));
       }
-      if (Objects.equals(transition.sourceActivityKey(), transition.targetActivityKey())) {
+      if (Objects.equals(transition.sourceActivityKey(), transition.targetActivityKey())
+          && transition.loopPolicy() == null) {
         findings.add(
             ValidationFinding.of(
                 ValidationSeverity.ERROR,
@@ -328,6 +329,8 @@ public final class WorkflowDefinitionValidator {
     detectCyclesAndLoops(definition, activitiesByKey, outgoingBySource, workflowKey, findings);
     detectConflictingPriorities(outgoingBySource, workflowKey, findings);
     detectOrphanJoins(definition, activitiesByKey, outgoingBySource, incomingByTarget, findings);
+    detectParallelPairing(
+        definition, activitiesByKey, outgoingBySource, incomingByTarget, findings);
     detectUnsupportedCombinations(
         definition, activitiesByKey, outgoingBySource, incomingByTarget, findings);
 
@@ -365,51 +368,63 @@ public final class WorkflowDefinitionValidator {
     if (activitiesByKey.isEmpty()) {
       return;
     }
-    boolean loopPolicyDeclared = definition.metadata().containsKey("loopPolicy");
-    if (loopPolicyDeclared) {
-      return;
-    }
-    Set<String> visiting = new HashSet<>();
-    Set<String> visited = new HashSet<>();
-    for (ActivityDefinition activity : definition.activities()) {
-      if (!visited.contains(activity.activityKey())) {
-        if (hasCycleFrom(
-            activity.activityKey(), visiting, visited, outgoingBySource, new HashSet<>())) {
-          findings.add(
-              ValidationFinding.of(
-                  ValidationSeverity.ERROR,
-                  "WF_UNDECLARED_CYCLE",
-                  "Workflow contains a cycle without an explicitly declared loop policy",
-                  workflowKey));
-          return;
-        }
+    List<List<Transition>> cycles = findSimpleCycles(activitiesByKey, outgoingBySource);
+    for (List<Transition> cycle : cycles) {
+      boolean covered = cycle.stream().anyMatch(t -> t.loopPolicy() != null);
+      if (!covered) {
+        findings.add(
+            ValidationFinding.of(
+                ValidationSeverity.ERROR,
+                "WF_UNDECLARED_CYCLE",
+                "Workflow contains a cycle without an explicit loop policy on any of its transitions",
+                workflowKey));
+        return;
       }
     }
   }
 
-  private static boolean hasCycleFrom(
+  private static List<List<Transition>> findSimpleCycles(
+      Map<String, ActivityDefinition> activitiesByKey,
+      Map<String, List<Transition>> outgoingBySource) {
+    List<String> nodeOrder = new ArrayList<>(activitiesByKey.keySet());
+    Map<String, Integer> nodeIndex = new HashMap<>();
+    for (int i = 0; i < nodeOrder.size(); i++) {
+      nodeIndex.put(nodeOrder.get(i), i);
+    }
+
+    List<List<Transition>> cycles = new ArrayList<>();
+    for (String start : nodeOrder) {
+      List<Transition> path = new ArrayList<>();
+      Set<String> visited = new HashSet<>();
+      visited.add(start);
+      findCyclesFrom(start, start, path, visited, cycles, nodeIndex, outgoingBySource);
+    }
+    return cycles;
+  }
+
+  private static void findCyclesFrom(
+      String start,
       String current,
-      Set<String> visiting,
+      List<Transition> path,
       Set<String> visited,
-      Map<String, List<Transition>> outgoingBySource,
-      Set<String> path) {
-    if (visiting.contains(current)) {
-      return true;
-    }
-    if (visited.contains(current)) {
-      return false;
-    }
-    visiting.add(current);
-    path.add(current);
+      List<List<Transition>> cycles,
+      Map<String, Integer> nodeIndex,
+      Map<String, List<Transition>> outgoingBySource) {
     for (Transition transition : outgoingBySource.getOrDefault(current, List.of())) {
-      if (hasCycleFrom(transition.targetActivityKey(), visiting, visited, outgoingBySource, path)) {
-        return true;
+      String target = transition.targetActivityKey();
+      if (target.equals(start)) {
+        List<Transition> cycle = new ArrayList<>(path);
+        cycle.add(transition);
+        cycles.add(cycle);
+      } else if (nodeIndex.getOrDefault(target, -1) > nodeIndex.getOrDefault(start, -1)
+          && !visited.contains(target)) {
+        visited.add(target);
+        path.add(transition);
+        findCyclesFrom(start, target, path, visited, cycles, nodeIndex, outgoingBySource);
+        path.remove(path.size() - 1);
+        visited.remove(target);
       }
     }
-    visiting.remove(current);
-    visited.add(current);
-    path.remove(current);
-    return false;
   }
 
   private static void detectConflictingPriorities(
@@ -502,6 +517,162 @@ public final class WorkflowDefinitionValidator {
       }
     }
     return false;
+  }
+
+  private static void detectParallelPairing(
+      WorkflowDefinition definition,
+      Map<String, ActivityDefinition> activitiesByKey,
+      Map<String, List<Transition>> outgoingBySource,
+      Map<String, List<Transition>> incomingByTarget,
+      List<ValidationFinding> findings) {
+    String workflowKey = definition.workflowKey();
+    Map<String, List<ParallelSplitActivity>> splitsByPair = new HashMap<>();
+    Map<String, List<ParallelJoinActivity>> joinsByPair = new HashMap<>();
+
+    for (ActivityDefinition activity : definition.activities()) {
+      if (activity instanceof ParallelSplitActivity split) {
+        if (split.pairKey() == null || split.pairKey().isBlank()) {
+          findings.add(
+              ValidationFinding.of(
+                  ValidationSeverity.ERROR,
+                  "WF_SPLIT_MISSING_PAIR_KEY",
+                  "PARALLEL_SPLIT must define a pair key",
+                  workflowKey,
+                  split.activityKey()));
+        } else {
+          splitsByPair.computeIfAbsent(split.pairKey(), k -> new ArrayList<>()).add(split);
+        }
+      }
+      if (activity instanceof ParallelJoinActivity join) {
+        if (join.pairKey() == null || join.pairKey().isBlank()) {
+          findings.add(
+              ValidationFinding.of(
+                  ValidationSeverity.ERROR,
+                  "WF_JOIN_MISSING_PAIR_KEY",
+                  "PARALLEL_JOIN must define a pair key",
+                  workflowKey,
+                  join.activityKey()));
+        } else {
+          joinsByPair.computeIfAbsent(join.pairKey(), k -> new ArrayList<>()).add(join);
+        }
+      }
+    }
+
+    Set<String> allPairKeys = new HashSet<>();
+    allPairKeys.addAll(splitsByPair.keySet());
+    allPairKeys.addAll(joinsByPair.keySet());
+
+    for (String pairKey : allPairKeys) {
+      List<ParallelSplitActivity> splits = splitsByPair.getOrDefault(pairKey, List.of());
+      List<ParallelJoinActivity> joins = joinsByPair.getOrDefault(pairKey, List.of());
+
+      if (splits.isEmpty()) {
+        findings.add(
+            ValidationFinding.of(
+                ValidationSeverity.ERROR,
+                "WF_UNMATCHED_JOIN",
+                "PARALLEL_JOIN has no matching PARALLEL_SPLIT for pair key: " + pairKey,
+                workflowKey,
+                joins.get(0).activityKey()));
+        continue;
+      }
+      if (joins.isEmpty()) {
+        findings.add(
+            ValidationFinding.of(
+                ValidationSeverity.ERROR,
+                "WF_UNMATCHED_SPLIT",
+                "PARALLEL_SPLIT has no matching PARALLEL_JOIN for pair key: " + pairKey,
+                workflowKey,
+                splits.get(0).activityKey()));
+        continue;
+      }
+      if (splits.size() > 1) {
+        findings.add(
+            ValidationFinding.of(
+                ValidationSeverity.ERROR,
+                "WF_DUPLICATE_SPLIT_PAIR_KEY",
+                "Multiple PARALLEL_SPLIT activities share pair key: " + pairKey,
+                workflowKey,
+                splits.get(0).activityKey()));
+      }
+      if (joins.size() > 1) {
+        findings.add(
+            ValidationFinding.of(
+                ValidationSeverity.ERROR,
+                "WF_DUPLICATE_JOIN_PAIR_KEY",
+                "Multiple PARALLEL_JOIN activities share pair key: " + pairKey,
+                workflowKey,
+                joins.get(0).activityKey()));
+      }
+      if (splits.size() != 1 || joins.size() != 1) {
+        continue;
+      }
+
+      ParallelSplitActivity split = splits.get(0);
+      ParallelJoinActivity join = joins.get(0);
+
+      Set<String> reachableFromSplit =
+          computeReachable(Set.of(split.activityKey()), outgoingBySource);
+      if (!reachableFromSplit.contains(join.activityKey())) {
+        findings.add(
+            ValidationFinding.of(
+                ValidationSeverity.ERROR,
+                "WF_JOIN_NOT_REACHABLE_FROM_SPLIT",
+                "PARALLEL_JOIN is not reachable from its paired PARALLEL_SPLIT",
+                workflowKey,
+                join.activityKey()));
+        continue;
+      }
+
+      for (Transition branch : outgoingBySource.getOrDefault(split.activityKey(), List.of())) {
+        if (!isReachable(branch.targetActivityKey(), join.activityKey(), outgoingBySource)) {
+          findings.add(
+              ValidationFinding.of(
+                  ValidationSeverity.ERROR,
+                  "WF_BRANCH_CANNOT_REACH_JOIN",
+                  "Branch from PARALLEL_SPLIT cannot reach its paired PARALLEL_JOIN",
+                  workflowKey,
+                  split.activityKey()));
+          break;
+        }
+      }
+
+      Set<String> reachableFromPairedSplit =
+          computeReachable(Set.of(split.activityKey()), outgoingBySource);
+      for (Transition incoming : incomingByTarget.getOrDefault(join.activityKey(), List.of())) {
+        if (!reachableFromPairedSplit.contains(incoming.sourceActivityKey())) {
+          findings.add(
+              ValidationFinding.of(
+                  ValidationSeverity.ERROR,
+                  "WF_JOIN_COMBINES_UNRELATED_BRANCHES",
+                  "PARALLEL_JOIN combines branches not originating from its paired PARALLEL_SPLIT",
+                  workflowKey,
+                  join.activityKey()));
+          break;
+        }
+      }
+    }
+  }
+
+  private static Set<String> computeReachable(
+      Set<String> sources, Map<String, List<Transition>> outgoingBySource) {
+    Set<String> reachable = new HashSet<>();
+    Deque<String> queue = new ArrayDeque<>(sources);
+    while (!queue.isEmpty()) {
+      String current = queue.poll();
+      if (!reachable.add(current)) {
+        continue;
+      }
+      for (Transition transition : outgoingBySource.getOrDefault(current, List.of())) {
+        queue.add(transition.targetActivityKey());
+      }
+    }
+    return reachable;
+  }
+
+  private static boolean isReachable(
+      String source, String target, Map<String, List<Transition>> outgoingBySource) {
+    return computeReachable(Set.of(source), outgoingBySource).contains(target);
   }
 
   private static void detectUnsupportedCombinations(

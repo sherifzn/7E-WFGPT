@@ -135,6 +135,14 @@ public final class WorkflowDefinitionJson {
       sb.append("\"inputContractRef\": ").append(Json.escape(s.inputContractRef())).append(",\n");
       appendIndent(sb, indent);
       sb.append("\"outputContractRef\": ").append(Json.escape(s.outputContractRef()));
+    } else if (activity instanceof ParallelSplitActivity p) {
+      sb.append(",\n");
+      appendIndent(sb, indent);
+      sb.append("\"pairKey\": ").append(Json.escape(p.pairKey()));
+    } else if (activity instanceof ParallelJoinActivity p) {
+      sb.append(",\n");
+      appendIndent(sb, indent);
+      sb.append("\"pairKey\": ").append(Json.escape(p.pairKey()));
     } else if (activity instanceof DecisionActivity d) {
       sb.append(",\n");
       appendIndent(sb, indent);
@@ -209,7 +217,10 @@ public final class WorkflowDefinitionJson {
       appendIndent(sb, indent + 2);
       sb.append("\"priority\": ").append(transition.priority()).append(",\n");
       appendIndent(sb, indent + 2);
-      sb.append("\"label\": ").append(Json.escape(transition.label()));
+      sb.append("\"label\": ").append(Json.escape(transition.label())).append(",\n");
+      appendIndent(sb, indent + 2);
+      sb.append("\"loopPolicy\": ");
+      serializeLoopPolicy(transition.loopPolicy(), sb, indent + 2);
       sb.append("\n");
       appendIndent(sb, indent + 1);
       sb.append("}");
@@ -220,6 +231,34 @@ public final class WorkflowDefinitionJson {
     }
     appendIndent(sb, indent);
     sb.append("]");
+  }
+
+  private static void serializeLoopPolicy(LoopPolicy loopPolicy, StringBuilder sb, int indent) {
+    if (loopPolicy == null) {
+      sb.append("null");
+      return;
+    }
+    sb.append("{\n");
+    appendIndent(sb, indent + 1);
+    sb.append("\"loopPolicyKey\": ").append(Json.escape(loopPolicy.loopPolicyKey())).append(",\n");
+    appendIndent(sb, indent + 1);
+    sb.append("\"loopType\": ").append(Json.escape(loopPolicy.loopType().name())).append(",\n");
+    appendIndent(sb, indent + 1);
+    sb.append("\"maxIterations\": ")
+        .append(loopPolicy.maxIterations() == null ? "null" : loopPolicy.maxIterations())
+        .append(",\n");
+    appendIndent(sb, indent + 1);
+    sb.append("\"exitConditionRef\": ")
+        .append(Json.escape(loopPolicy.exitConditionRef()))
+        .append(",\n");
+    appendIndent(sb, indent + 1);
+    sb.append("\"policyRef\": ").append(Json.escape(loopPolicy.policyRef())).append(",\n");
+    appendIndent(sb, indent + 1);
+    sb.append("\"timeoutPolicyRef\": ")
+        .append(Json.escape(loopPolicy.timeoutPolicyRef()))
+        .append("\n");
+    appendIndent(sb, indent);
+    sb.append("}");
   }
 
   private static void serializeStrings(List<String> values, StringBuilder sb, int indent) {
@@ -373,7 +412,8 @@ public final class WorkflowDefinitionJson {
                     obj.string("requiredRoleRef", null),
                     obj.string("retryPolicyRef", null),
                     obj.string("timeoutRef", null),
-                    obj.metadata("metadata"));
+                    obj.metadata("metadata"),
+                    obj.requiredString("pairKey"));
             case PARALLEL_JOIN ->
                 new ParallelJoinActivity(
                     obj.requiredString("activityKey"),
@@ -384,7 +424,8 @@ public final class WorkflowDefinitionJson {
                     obj.string("requiredRoleRef", null),
                     obj.string("retryPolicyRef", null),
                     obj.string("timeoutRef", null),
-                    obj.metadata("metadata"));
+                    obj.metadata("metadata"),
+                    obj.requiredString("pairKey"));
             case CHILD_WORKFLOW ->
                 new ChildWorkflowActivity(
                     obj.requiredString("activityKey"),
@@ -450,9 +491,23 @@ public final class WorkflowDefinitionJson {
               obj.string("outcome", null),
               obj.string("conditionRef", null),
               obj.intValue("priority", 0),
-              obj.string("label", "")));
+              obj.string("label", ""),
+              deserializeLoopPolicy(obj.object("loopPolicy"))));
     }
     return transitions;
+  }
+
+  private static LoopPolicy deserializeLoopPolicy(JsonObject obj) {
+    if (obj == null) {
+      return null;
+    }
+    return new LoopPolicy(
+        obj.requiredString("loopPolicyKey"),
+        LoopType.valueOf(obj.requiredString("loopType")),
+        obj.integer("maxIterations", null),
+        obj.string("exitConditionRef", null),
+        obj.string("policyRef", null),
+        obj.string("timeoutPolicyRef", null));
   }
 
   private static final class Json {
@@ -744,6 +799,34 @@ public final class WorkflowDefinitionJson {
         throw new IllegalArgumentException("Field " + key + " must be an integer");
       }
       return Integer.parseInt(n.value());
+    }
+
+    Integer integer(String key, Integer defaultValue) {
+      JsonValue value = values.get(key);
+      if (value == null) {
+        return defaultValue;
+      }
+      if (value instanceof JsonNull) {
+        return null;
+      }
+      if (!(value instanceof JsonNumber n)) {
+        throw new IllegalArgumentException("Field " + key + " must be an integer");
+      }
+      return Integer.parseInt(n.value());
+    }
+
+    JsonObject object(String key) {
+      JsonValue value = values.get(key);
+      if (value == null) {
+        return null;
+      }
+      if (value instanceof JsonNull) {
+        return null;
+      }
+      if (!(value instanceof JsonObject o)) {
+        throw new IllegalArgumentException("Field " + key + " must be an object");
+      }
+      return o;
     }
 
     JsonArray requiredArray(String key) {

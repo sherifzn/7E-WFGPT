@@ -255,7 +255,8 @@ final class WorkflowDefinitionValidatorTest {
   void invalidParallelSplitIsInvalid() {
     WorkflowDefinition base = WorkflowDefinitionFixtures.simpleLinearWorkflow();
     ParallelSplitActivity split =
-        new ParallelSplitActivity("split", "Split", "", null, null, null, null, null, Map.of());
+        new ParallelSplitActivity(
+            "split", "Split", "", null, null, null, null, null, Map.of(), "pair-1");
     WorkflowDefinition definition =
         new WorkflowDefinition(
             base.workflowKey(),
@@ -287,7 +288,8 @@ final class WorkflowDefinitionValidatorTest {
   void orphanParallelJoinIsInvalid() {
     WorkflowDefinition base = WorkflowDefinitionFixtures.simpleLinearWorkflow();
     ParallelJoinActivity join =
-        new ParallelJoinActivity("join", "Join", "", null, null, null, null, null, Map.of());
+        new ParallelJoinActivity(
+            "join", "Join", "", null, null, null, null, null, Map.of(), "pair-1");
     HumanTaskActivity a =
         new HumanTaskActivity(
             "a",
@@ -626,11 +628,18 @@ final class WorkflowDefinitionValidatorTest {
             List.of(
                 new Transition("start", "task", null, null, 0, ""),
                 new Transition("task", "decision", null, null, 0, ""),
-                new Transition("decision", "task", "RETRY", null, 0, ""),
+                new Transition(
+                    "decision",
+                    "task",
+                    "RETRY",
+                    null,
+                    0,
+                    "",
+                    new LoopPolicy("retry-loop", LoopType.BOUNDED, 3, null, null, null)),
                 new Transition("decision", "end", "PROCEED", null, 0, "")),
             "start",
             List.of("end"),
-            Map.of("loopPolicy", "explicit"),
+            Map.of(),
             Instant.now(),
             "tester",
             "correlationKey",
@@ -734,6 +743,723 @@ final class WorkflowDefinitionValidatorTest {
     assertThrows(IllegalArgumentException.class, () -> new SemanticVersion("1.0"));
     assertThrows(IllegalArgumentException.class, () -> new SemanticVersion("01.0.0"));
     assertThrows(IllegalArgumentException.class, () -> new SemanticVersion("1.0.0-"));
+  }
+
+  @Test
+  void boundedLoopIsAccepted() {
+    WorkflowDefinition definition = loopWorkflow();
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertTrue(result.isValid(), result.findings().toString());
+  }
+
+  @Test
+  void boundedLoopWithoutMaximumIsRejected() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new LoopPolicy("retry-loop", LoopType.BOUNDED, null, null, null, null));
+  }
+
+  @Test
+  void conditionLoopWithoutExitConditionIsRejected() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new LoopPolicy("retry-loop", LoopType.CONDITION_CONTROLLED, null, null, null, null));
+  }
+
+  @Test
+  void policyLoopWithoutPolicyReferenceIsRejected() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new LoopPolicy("retry-loop", LoopType.POLICY_CONTROLLED, null, null, null, null));
+  }
+
+  @Test
+  void cycleWithoutLoopPolicyIsRejected() {
+    WorkflowDefinition base = WorkflowDefinitionFixtures.simpleLinearWorkflow();
+    WorkflowDefinition definition =
+        copyWithTransitions(
+            base,
+            List.of(
+                new Transition("start", "task", null, null, 0, ""),
+                new Transition("task", "end", null, null, 0, ""),
+                new Transition("end", "task", null, null, 0, "")));
+
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertFalse(result.isValid());
+    assertHasCode(result, "WF_UNDECLARED_CYCLE");
+  }
+
+  @Test
+  void unrelatedLoopPolicyDoesNotAuthorizeAnotherCycle() {
+    DecisionActivity decision =
+        new DecisionActivity(
+            "decision",
+            "Decision",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "decision",
+            "rule-set",
+            List.of("RETRY", "PROCEED"));
+    HumanTaskActivity task =
+        new HumanTaskActivity(
+            "task",
+            "Task",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    HumanTaskActivity extra =
+        new HumanTaskActivity(
+            "extra",
+            "Extra",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
+    WorkflowDefinition definition =
+        new WorkflowDefinition(
+            "multi.loop",
+            "Multi Loop",
+            "",
+            new SemanticVersion("1.0.0"),
+            WorkflowDefinitionStatus.DRAFT,
+            List.of(
+                new StartActivity("start", "Start", "", null, null, null, null, null, Map.of()),
+                task,
+                extra,
+                decision,
+                end),
+            List.of(
+                new Transition("start", "task", null, null, 0, ""),
+                new Transition("task", "decision", null, null, 0, ""),
+                new Transition(
+                    "decision",
+                    "task",
+                    "RETRY",
+                    null,
+                    0,
+                    "",
+                    new LoopPolicy("retry-loop", LoopType.BOUNDED, 3, null, null, null)),
+                new Transition("decision", "extra", "PROCEED", null, 0, ""),
+                new Transition("extra", "task", null, null, 0, "")),
+            "start",
+            List.of("end"),
+            Map.of(),
+            Instant.now(),
+            "tester",
+            "correlationKey",
+            "commandId");
+
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertFalse(result.isValid());
+    assertHasCode(result, "WF_UNDECLARED_CYCLE");
+  }
+
+  @Test
+  void loopPolicyJsonRoundTrip() {
+    WorkflowDefinition original = loopWorkflow();
+    String json = WorkflowDefinitionJson.serialize(original);
+    WorkflowDefinition roundTripped = WorkflowDefinitionJson.deserialize(json);
+
+    Transition originalBackEdge = roundTripped.transitions().get(2);
+    assertEquals("decision", originalBackEdge.sourceActivityKey());
+    assertEquals("task", originalBackEdge.targetActivityKey());
+    assertEquals("retry-loop", originalBackEdge.loopPolicy().loopPolicyKey());
+    assertEquals(LoopType.BOUNDED, originalBackEdge.loopPolicy().loopType());
+    assertEquals(3, originalBackEdge.loopPolicy().maxIterations());
+  }
+
+  @Test
+  void validSingleSplitJoinPairIsAccepted() {
+    ValidationResult result =
+        WorkflowDefinitionValidator.validate(WorkflowDefinitionFixtures.parallelWorkflow());
+    assertTrue(result.isValid(), result.findings().toString());
+  }
+
+  @Test
+  void validNestedSplitJoinPairsAreAccepted() {
+    StartActivity start =
+        new StartActivity("start", "Start", "", null, null, null, null, null, Map.of());
+    ParallelSplitActivity outerSplit =
+        new ParallelSplitActivity(
+            "outerSplit", "Outer Split", "", null, null, null, null, null, Map.of(), "outer");
+    ParallelSplitActivity innerSplit =
+        new ParallelSplitActivity(
+            "innerSplit", "Inner Split", "", null, null, null, null, null, Map.of(), "inner");
+    HumanTaskActivity taskA =
+        new HumanTaskActivity(
+            "taskA",
+            "Task A",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "roleA",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    HumanTaskActivity taskB =
+        new HumanTaskActivity(
+            "taskB",
+            "Task B",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "roleB",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    HumanTaskActivity taskC =
+        new HumanTaskActivity(
+            "taskC",
+            "Task C",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "roleC",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    ParallelJoinActivity innerJoin =
+        new ParallelJoinActivity(
+            "innerJoin", "Inner Join", "", null, null, null, null, null, Map.of(), "inner");
+    ParallelJoinActivity outerJoin =
+        new ParallelJoinActivity(
+            "outerJoin", "Outer Join", "", null, null, null, null, null, Map.of(), "outer");
+    EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
+
+    WorkflowDefinition definition =
+        new WorkflowDefinition(
+            "nested.parallel",
+            "Nested Parallel",
+            "",
+            new SemanticVersion("1.0.0"),
+            WorkflowDefinitionStatus.DRAFT,
+            List.of(start, outerSplit, innerSplit, taskA, taskB, taskC, innerJoin, outerJoin, end),
+            List.of(
+                new Transition("start", "outerSplit", null, null, 0, ""),
+                new Transition("outerSplit", "innerSplit", null, null, 0, ""),
+                new Transition("outerSplit", "taskB", null, null, 1, ""),
+                new Transition("innerSplit", "taskA", null, null, 0, ""),
+                new Transition("innerSplit", "taskC", null, null, 1, ""),
+                new Transition("taskA", "innerJoin", null, null, 0, ""),
+                new Transition("taskC", "innerJoin", null, null, 0, ""),
+                new Transition("innerJoin", "outerJoin", null, null, 0, ""),
+                new Transition("taskB", "outerJoin", null, null, 0, ""),
+                new Transition("outerJoin", "end", null, null, 0, "")),
+            "start",
+            List.of("end"),
+            Map.of(),
+            Instant.now(),
+            "tester",
+            "correlationKey",
+            "commandId");
+
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertTrue(result.isValid(), result.findings().toString());
+  }
+
+  @Test
+  void missingPairKeyIsRejected() {
+    StartActivity start =
+        new StartActivity("start", "Start", "", null, null, null, null, null, Map.of());
+    ParallelSplitActivity split =
+        new ParallelSplitActivity("split", "Split", "", null, null, null, null, null, Map.of(), "");
+    ParallelJoinActivity join =
+        new ParallelJoinActivity(
+            "join", "Join", "", null, null, null, null, null, Map.of(), "pair-1");
+    HumanTaskActivity task =
+        new HumanTaskActivity(
+            "task",
+            "Task",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
+
+    WorkflowDefinition definition =
+        new WorkflowDefinition(
+            "missing.pair",
+            "Missing Pair",
+            "",
+            new SemanticVersion("1.0.0"),
+            WorkflowDefinitionStatus.DRAFT,
+            List.of(start, split, task, join, end),
+            List.of(
+                new Transition("start", "split", null, null, 0, ""),
+                new Transition("split", "task", null, null, 0, ""),
+                new Transition("task", "join", null, null, 0, ""),
+                new Transition("join", "end", null, null, 0, "")),
+            "start",
+            List.of("end"),
+            Map.of(),
+            Instant.now(),
+            "tester",
+            "correlationKey",
+            "commandId");
+
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertFalse(result.isValid());
+    assertHasCode(result, "WF_SPLIT_MISSING_PAIR_KEY");
+  }
+
+  @Test
+  void unmatchedSplitIsRejected() {
+    StartActivity start =
+        new StartActivity("start", "Start", "", null, null, null, null, null, Map.of());
+    ParallelSplitActivity split =
+        new ParallelSplitActivity(
+            "split", "Split", "", null, null, null, null, null, Map.of(), "pair-1");
+    HumanTaskActivity task =
+        new HumanTaskActivity(
+            "task",
+            "Task",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
+
+    WorkflowDefinition definition =
+        new WorkflowDefinition(
+            "unmatched.split",
+            "Unmatched Split",
+            "",
+            new SemanticVersion("1.0.0"),
+            WorkflowDefinitionStatus.DRAFT,
+            List.of(start, split, task, end),
+            List.of(
+                new Transition("start", "split", null, null, 0, ""),
+                new Transition("split", "task", null, null, 0, ""),
+                new Transition("split", "end", null, null, 1, ""),
+                new Transition("task", "end", null, null, 0, "")),
+            "start",
+            List.of("end"),
+            Map.of(),
+            Instant.now(),
+            "tester",
+            "correlationKey",
+            "commandId");
+
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertFalse(result.isValid());
+    assertHasCode(result, "WF_UNMATCHED_SPLIT");
+  }
+
+  @Test
+  void unmatchedJoinIsRejected() {
+    StartActivity start =
+        new StartActivity("start", "Start", "", null, null, null, null, null, Map.of());
+    ParallelJoinActivity join =
+        new ParallelJoinActivity(
+            "join", "Join", "", null, null, null, null, null, Map.of(), "pair-1");
+    HumanTaskActivity task =
+        new HumanTaskActivity(
+            "task",
+            "Task",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
+
+    WorkflowDefinition definition =
+        new WorkflowDefinition(
+            "unmatched.join",
+            "Unmatched Join",
+            "",
+            new SemanticVersion("1.0.0"),
+            WorkflowDefinitionStatus.DRAFT,
+            List.of(start, task, join, end),
+            List.of(
+                new Transition("start", "task", null, null, 0, ""),
+                new Transition("task", "join", null, null, 0, ""),
+                new Transition("task", "end", null, null, 1, ""),
+                new Transition("join", "end", null, null, 0, "")),
+            "start",
+            List.of("end"),
+            Map.of(),
+            Instant.now(),
+            "tester",
+            "correlationKey",
+            "commandId");
+
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertFalse(result.isValid());
+    assertHasCode(result, "WF_UNMATCHED_JOIN");
+  }
+
+  @Test
+  void duplicatePairKeysAreRejected() {
+    StartActivity start =
+        new StartActivity("start", "Start", "", null, null, null, null, null, Map.of());
+    ParallelSplitActivity split1 =
+        new ParallelSplitActivity(
+            "split1", "Split 1", "", null, null, null, null, null, Map.of(), "pair-1");
+    ParallelSplitActivity split2 =
+        new ParallelSplitActivity(
+            "split2", "Split 2", "", null, null, null, null, null, Map.of(), "pair-1");
+    ParallelJoinActivity join =
+        new ParallelJoinActivity(
+            "join", "Join", "", null, null, null, null, null, Map.of(), "pair-1");
+    HumanTaskActivity task =
+        new HumanTaskActivity(
+            "task",
+            "Task",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
+
+    WorkflowDefinition definition =
+        new WorkflowDefinition(
+            "duplicate.pair",
+            "Duplicate Pair",
+            "",
+            new SemanticVersion("1.0.0"),
+            WorkflowDefinitionStatus.DRAFT,
+            List.of(start, split1, split2, task, join, end),
+            List.of(
+                new Transition("start", "split1", null, null, 0, ""),
+                new Transition("split1", "task", null, null, 0, ""),
+                new Transition("split2", "task", null, null, 0, ""),
+                new Transition("task", "join", null, null, 0, ""),
+                new Transition("join", "end", null, null, 0, "")),
+            "start",
+            List.of("end"),
+            Map.of(),
+            Instant.now(),
+            "tester",
+            "correlationKey",
+            "commandId");
+
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertFalse(result.isValid());
+    assertHasCode(result, "WF_DUPLICATE_SPLIT_PAIR_KEY");
+  }
+
+  @Test
+  void crossingGatewayPairsAreRejected() {
+    StartActivity start =
+        new StartActivity("start", "Start", "", null, null, null, null, null, Map.of());
+    ParallelSplitActivity splitA =
+        new ParallelSplitActivity(
+            "splitA", "Split A", "", null, null, null, null, null, Map.of(), "pair-a");
+    ParallelSplitActivity splitB =
+        new ParallelSplitActivity(
+            "splitB", "Split B", "", null, null, null, null, null, Map.of(), "pair-b");
+    ParallelJoinActivity joinA =
+        new ParallelJoinActivity(
+            "joinA", "Join A", "", null, null, null, null, null, Map.of(), "pair-a");
+    ParallelJoinActivity joinB =
+        new ParallelJoinActivity(
+            "joinB", "Join B", "", null, null, null, null, null, Map.of(), "pair-b");
+    HumanTaskActivity taskA =
+        new HumanTaskActivity(
+            "taskA",
+            "Task A",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    HumanTaskActivity taskB =
+        new HumanTaskActivity(
+            "taskB",
+            "Task B",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    HumanTaskActivity taskC =
+        new HumanTaskActivity(
+            "taskC",
+            "Task C",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
+
+    WorkflowDefinition definition =
+        new WorkflowDefinition(
+            "crossing.pair",
+            "Crossing Pair",
+            "",
+            new SemanticVersion("1.0.0"),
+            WorkflowDefinitionStatus.DRAFT,
+            List.of(start, splitA, splitB, taskA, taskB, taskC, joinA, joinB, end),
+            List.of(
+                new Transition("start", "splitA", null, null, 0, ""),
+                new Transition("splitA", "splitB", null, null, 0, ""),
+                new Transition("splitA", "taskA", null, null, 1, ""),
+                new Transition("splitB", "taskB", null, null, 0, ""),
+                new Transition("splitB", "joinA", null, null, 1, ""),
+                new Transition("taskA", "joinA", null, null, 0, ""),
+                new Transition("taskB", "joinB", null, null, 0, ""),
+                new Transition("taskC", "joinB", null, null, 0, ""),
+                new Transition("joinA", "end", null, null, 0, ""),
+                new Transition("joinB", "end", null, null, 0, "")),
+            "start",
+            List.of("end"),
+            Map.of(),
+            Instant.now(),
+            "tester",
+            "correlationKey",
+            "commandId");
+
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertFalse(result.isValid());
+    assertHasCode(result, "WF_JOIN_COMBINES_UNRELATED_BRANCHES");
+  }
+
+  @Test
+  void branchUnableToReachPairedJoinIsRejected() {
+    StartActivity start =
+        new StartActivity("start", "Start", "", null, null, null, null, null, Map.of());
+    ParallelSplitActivity split =
+        new ParallelSplitActivity(
+            "split", "Split", "", null, null, null, null, null, Map.of(), "pair-1");
+    HumanTaskActivity task =
+        new HumanTaskActivity(
+            "task",
+            "Task",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    ParallelJoinActivity join =
+        new ParallelJoinActivity(
+            "join", "Join", "", null, null, null, null, null, Map.of(), "pair-1");
+    EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
+
+    WorkflowDefinition definition =
+        new WorkflowDefinition(
+            "branch.misses.join",
+            "Branch Misses Join",
+            "",
+            new SemanticVersion("1.0.0"),
+            WorkflowDefinitionStatus.DRAFT,
+            List.of(start, split, task, join, end),
+            List.of(
+                new Transition("start", "split", null, null, 0, ""),
+                new Transition("split", "task", null, null, 0, ""),
+                new Transition("split", "end", null, null, 1, ""),
+                new Transition("task", "join", null, null, 0, ""),
+                new Transition("join", "end", null, null, 0, "")),
+            "start",
+            List.of("end"),
+            Map.of(),
+            Instant.now(),
+            "tester",
+            "correlationKey",
+            "commandId");
+
+    ValidationResult result = WorkflowDefinitionValidator.validate(definition);
+    assertFalse(result.isValid());
+    assertHasCode(result, "WF_BRANCH_CANNOT_REACH_JOIN");
+  }
+
+  @Test
+  void gatewayPairKeyJsonRoundTrip() {
+    WorkflowDefinition original = WorkflowDefinitionFixtures.parallelWorkflow();
+    String json = WorkflowDefinitionJson.serialize(original);
+    WorkflowDefinition roundTripped = WorkflowDefinitionJson.deserialize(json);
+
+    ParallelSplitActivity split =
+        (ParallelSplitActivity)
+            roundTripped.activities().stream()
+                .filter(a -> a.type() == ActivityType.PARALLEL_SPLIT)
+                .findFirst()
+                .orElseThrow();
+    ParallelJoinActivity join =
+        (ParallelJoinActivity)
+            roundTripped.activities().stream()
+                .filter(a -> a.type() == ActivityType.PARALLEL_JOIN)
+                .findFirst()
+                .orElseThrow();
+    assertEquals("pair-1", split.pairKey());
+    assertEquals("pair-1", join.pairKey());
+    assertTrue(WorkflowDefinitionValidator.validate(roundTripped).isValid());
+  }
+
+  private static WorkflowDefinition loopWorkflow() {
+    DecisionActivity decision =
+        new DecisionActivity(
+            "decision",
+            "Decision",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "decision",
+            "rule-set",
+            List.of("RETRY", "PROCEED"));
+    HumanTaskActivity task =
+        new HumanTaskActivity(
+            "task",
+            "Task",
+            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            "taskType",
+            "operator",
+            List.of("DONE"),
+            List.of(),
+            null,
+            null);
+    EndActivity end = new EndActivity("end", "End", "", null, null, null, null, null, Map.of());
+    return new WorkflowDefinition(
+        "loop.workflow",
+        "Loop Workflow",
+        "",
+        new SemanticVersion("1.0.0"),
+        WorkflowDefinitionStatus.DRAFT,
+        List.of(
+            new StartActivity("start", "Start", "", null, null, null, null, null, Map.of()),
+            task,
+            decision,
+            end),
+        List.of(
+            new Transition("start", "task", null, null, 0, ""),
+            new Transition("task", "decision", null, null, 0, ""),
+            new Transition(
+                "decision",
+                "task",
+                "RETRY",
+                null,
+                0,
+                "",
+                new LoopPolicy("retry-loop", LoopType.BOUNDED, 3, null, null, null)),
+            new Transition("decision", "end", "PROCEED", null, 0, "")),
+        "start",
+        List.of("end"),
+        Map.of(),
+        Instant.now(),
+        "tester",
+        "correlationKey",
+        "commandId");
   }
 
   private static WorkflowDefinition copyWithActivities(

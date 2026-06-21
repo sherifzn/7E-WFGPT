@@ -12,7 +12,8 @@ public record ParallelJoinActivity(
     String requiredRoleRef,
     String retryPolicyRef,
     String timeoutRef,
-    Map<String, String> metadata)
+    Map<String, String> metadata,
+    String pairKey)
     implements ActivityDefinition {
 
   public ParallelJoinActivity {
@@ -20,6 +21,7 @@ public record ParallelJoinActivity(
     displayName = Validation.requireText(displayName, "displayName");
     description = description == null ? "" : description;
     metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+    pairKey = pairKey == null ? "" : pairKey;
   }
 
   @Override
