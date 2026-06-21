@@ -1004,6 +1004,76 @@ public final class KeyHandoverApplicationService {
     return state;
   }
 
+  public KeyHandoverState initializeLegacyHold(
+      KeyHandoverRequestId requestId,
+      Actor processOwner,
+      CorrelationId correlationId,
+      CausationId causationId) {
+    KeyHandoverState state = requireState(requestId);
+    if (state.status() != RequestStatus.HOLD || !state.holds().isEmpty()) return state;
+    Set<ClearanceBranch> affectedBranches =
+        state.branches().values().stream()
+            .filter(
+                branch ->
+                    branch.status() == BranchStatus.COMPLETED
+                        && branch.outcome().orElse(null) == ClearanceOutcome.RED)
+            .map(BranchState::branch)
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    if (affectedBranches.isEmpty()) return state;
+    Instant startedAt = clock.now();
+    int cycleNumber =
+        state.holds().stream().mapToInt(HoldRecord::cycleNumber).max().orElse(0) + 1;
+    HoldRecord hold =
+        new HoldRecord(
+            new HoldId("hold-" + state.requestId().value() + "-" + cycleNumber),
+            state.requestId(),
+            cycleNumber,
+            holdPolicy.policyReference(),
+            holdPolicy,
+            HoldLifecycleStatus.ACTIVE,
+            "Legacy hold initialized from RED clearance branches",
+            affectedBranches,
+            processOwner.actorId(),
+            processOwner.actorId(),
+            startedAt,
+            HoldTiming.calculateReviewAt(startedAt, holdPolicy, businessCalendar),
+            HoldTiming.calculateInitialExpiryAt(startedAt, holdPolicy, businessCalendar),
+            0,
+            Map.of(),
+            new DomainVersion(state.stateVersion().value() + 1),
+            correlationId,
+            causationId);
+    KeyHandoverState next =
+        nextWithHolds(
+            state,
+            RequestStatus.HOLD,
+            state.branches(),
+            state.finalDecision(),
+            appendHold(state.holds(), hold));
+    return commit(
+        next,
+        state.stateVersion(),
+        List.of(
+            audit(
+                "LegacyHoldInitialized",
+                next,
+                processOwner.actorId(),
+                correlationId,
+                causationId,
+                List.of(),
+                Map.of(
+                    "holdId",
+                    hold.holdId().value(),
+                    "affectedBranches",
+                    affectedBranches.stream().map(Enum::name).sorted().collect(java.util.stream.Collectors.joining(",")),
+                    "policyVersion",
+                    hold.policyReference().value(),
+                    "previousState",
+                    state.status().name(),
+                    "newState",
+                    next.status().name()))));
+  }
+
   public void deliverPendingAudits() {
     for (AuditRecord audit : stateStore.pendingAudits()) {
       auditSink.emit(audit);

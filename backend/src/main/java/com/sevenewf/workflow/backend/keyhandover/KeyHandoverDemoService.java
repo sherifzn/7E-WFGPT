@@ -338,15 +338,25 @@ public final class KeyHandoverDemoService {
   private KeyHandoverState state(String number) {
     return store
         .findByBusinessKey(new BusinessKey(number))
+        .map(this::initializeLegacyHold)
         .orElseThrow(() -> new ValidationFailedException("Unknown key handover request"));
   }
 
   private String listJson() {
     return "["
         + store.states().stream()
+            .map(this::initializeLegacyHold)
             .map(this::summaryJson)
             .collect(java.util.stream.Collectors.joining(","))
         + "]";
+  }
+
+  private KeyHandoverState initializeLegacyHold(KeyHandoverState state) {
+    return service.initializeLegacyHold(
+        state.requestId(),
+        processOwner(),
+        correlation(state.businessKey().value()),
+        causation(state.businessKey().value(), "legacy-hold-initialization"));
   }
 
   private String requestJson(KeyHandoverState state) {

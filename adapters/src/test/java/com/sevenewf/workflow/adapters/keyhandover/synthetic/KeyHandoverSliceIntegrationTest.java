@@ -725,6 +725,62 @@ final class KeyHandoverSliceIntegrationTest {
     assertTrue(cancelledContext.audit.hasEvent("HoldCancelled"));
   }
 
+  @Test
+  void initializesAndPersistsLegacyHoldWithoutDuplicatingItsCycle() throws Exception {
+    Path snapshot = Files.createTempFile("key-handover-legacy-hold", ".snapshot");
+    SliceContext context =
+        new SliceContext("legacy-hold", new TestOnlyPathBackedKeyHandoverStateStore(snapshot));
+    KeyHandoverState held = context.completeToHold(Set.of(ClearanceBranch.LEGAL));
+    KeyHandoverState legacy = withoutHolds(held);
+    context.store.commit(legacy, held.stateVersion(), List.of());
+
+    KeyHandoverState initialized =
+        context.service.initializeLegacyHold(
+            legacy.requestId(),
+            context.processOwner(),
+            context.correlation(),
+            context.causation("legacy-initialization"));
+    assertEquals(RequestStatus.HOLD, initialized.status());
+    assertEquals(1, initialized.holds().size());
+    assertEquals(Set.of(ClearanceBranch.LEGAL), initialized.holds().getFirst().affectedBranches());
+    assertTrue(initialized.authorization().isEmpty());
+    assertTrue(initialized.notificationState().isEmpty());
+    assertEquals(ClearanceOutcome.GREEN, initialized.branches().get(ClearanceBranch.HANDOVER).outcome().orElseThrow());
+    assertTrue(context.audit.hasEvent("LegacyHoldInitialized"));
+    assertEquals(
+        initialized,
+        context.service.initializeLegacyHold(
+            initialized.requestId(),
+            context.processOwner(),
+            context.correlation(),
+            context.causation("legacy-repeat")));
+
+    KeyHandoverState reloaded =
+        new TestOnlyPathBackedKeyHandoverStateStore(snapshot)
+            .findById(initialized.requestId())
+            .orElseThrow();
+    assertEquals(initialized.holds(), reloaded.holds());
+  }
+
+  private static KeyHandoverState withoutHolds(KeyHandoverState state) {
+    return new KeyHandoverState(
+        state.requestId(),
+        new DomainVersion(state.stateVersion().value() + 1),
+        state.businessKey(),
+        state.propertyReference(),
+        state.ownerReference(),
+        RequestStatus.HOLD,
+        state.inspectionStatus(),
+        state.inspectionChildWorkflowId(),
+        state.branches(),
+        state.finalDecision(),
+        state.exceptionDecision(),
+        Optional.empty(),
+        Optional.empty(),
+        List.of(),
+        state.updatedAt());
+  }
+
   private static final class SliceContext {
     final BusinessKey businessKey;
     final PropertyReference property = new PropertyReference("synthetic-property");
