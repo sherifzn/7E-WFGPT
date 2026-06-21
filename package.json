@@ -8,6 +8,11 @@
   "type": "module",
   "scripts": {
     "build": "npm run build --workspace frontend && mvn -B -q package",
+    "dev": "node scripts/dev.mjs",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "dev:backend": "node scripts/dev.mjs --backend",
+    "dev:check": "node scripts/dev-check.mjs",
+    "dev:reset-data": "node scripts/reset-dev-data.mjs",
     "format": "prettier --check . && mvn -B -q spotless:check",
     "format:fix": "prettier --write . && mvn -B -q spotless:apply",
     "lint": "npm run lint --workspace frontend",

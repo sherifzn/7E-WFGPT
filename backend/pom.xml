@@ -13,6 +13,16 @@
   <dependencies>
     <dependency>
       <groupId>com.sevenewf.workflow</groupId>
+      <artifactId>adapters</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.sevenewf.workflow</groupId>
+      <artifactId>domain</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.sevenewf.workflow</groupId>
       <artifactId>contracts</artifactId>
       <version>${project.version}</version>
     </dependency>
